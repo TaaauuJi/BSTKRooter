@@ -1,0 +1,4 @@
+#include "resources.h"
+
+// Embed su_c binary as RCDATA resource
+IDR_SU_BINARY RCDATA "..\\res\\su_c"
