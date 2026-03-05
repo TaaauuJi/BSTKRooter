@@ -1,0 +1,21 @@
+# Build output
+build/
+
+# MSVC intermediates
+*.obj
+*.pdb
+*.res
+*.ilk
+*.exp
+*.lib
+*.idb
+
+# Logs
+*.log
+
+# ImGui state
+imgui.ini
+
+# OS junk
+Thumbs.db
+desktop.ini
