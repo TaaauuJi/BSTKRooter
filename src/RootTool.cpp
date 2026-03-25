@@ -11,12 +11,11 @@
 #include <algorithm>
 #include <cstring>
 
-// VHDManager from ext4handle
 #include "VHDManager.h"
 
 namespace fs = std::filesystem;
 
-// ─── Internals ────────────────────────────────────────────────────────────────
+
 
 static void KillProcessByName(const char* name) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -32,13 +31,16 @@ static void KillProcessByName(const char* name) {
     CloseHandle(snap);
 }
 
-// ─── Construction / Discovery ─────────────────────────────────────────────────
+
 
 RootTool::RootTool() { RefreshEmulatorInfo(); }
 
-void RootTool::Log(const std::string& msg, bool /*isError*/) {
-    m_log += msg + "\n";
-    m_scrollToBottom = true;
+void RootTool::Log(const std::string& /*msg*/, bool /*isError*/) {
+}
+
+void RootTool::SetStatus(const std::string& msg, bool isError) {
+    m_statusMsg     = msg;
+    m_statusIsError = isError;
 }
 
 std::string RootTool::ReadRegistryString(const std::string& subKey, const std::string& valueName) {
@@ -58,46 +60,71 @@ void RootTool::FindInstances(EmulatorInfo& info) {
     info.instances.clear();
     if (info.dataDir.empty()) return;
 
-    // DataDir from registry may already end with "Engine\" or may be the parent.
-    // Determine the actual Engine directory.
     std::string engineDir = info.dataDir;
-
-    // Normalize: ensure trailing backslash
     if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/')
         engineDir += '\\';
 
-    // If DataDir already ends with Engine\, use it directly.
-    // Otherwise append Engine\.
     bool alreadyHasEngine = false;
     {
         std::string lower = engineDir;
         for (auto& ch : lower) ch = (char)tolower((unsigned char)ch);
-        if (lower.find("engine\\") != std::string::npos ||
-            lower.find("engine/")  != std::string::npos)
+        if (lower.find("engine\\") != std::string::npos || lower.find("engine/") != std::string::npos)
             alreadyHasEngine = true;
     }
 
-    if (!alreadyHasEngine) {
-        engineDir += "Engine\\";
-    }
+    if (!alreadyHasEngine) engineDir += "Engine\\";
 
     if (!fs::exists(engineDir)) return;
+
+    std::string metaPath = engineDir + "UserData\\MimMetaData.json";
+    if (fs::exists(metaPath)) {
+        std::string content = ReadFileString(metaPath);
+        std::regex blockRegex(R"(\{([^{}]*\"InstanceName\"[^{}]*)\})");
+        auto next = std::sregex_iterator(content.begin(), content.end(), blockRegex);
+        auto end = std::sregex_iterator();
+        while (next != end) {
+            std::string block = next->str(1);
+            std::regex nameRegex(R"(\"Name\"\s*:\s*\"([^\"]+)\")");
+            std::regex instNameRegex(R"(\"InstanceName\"\s*:\s*\"([^\"]+)\")");
+            std::smatch nameMatch, instNameMatch;
+            if (std::regex_search(block, nameMatch, nameRegex) && std::regex_search(block, instNameMatch, instNameRegex)) {
+                BstkInstance inst;
+                inst.displayName = nameMatch[1].str();
+                inst.instanceName = instNameMatch[1].str();
+
+                bool found = false;
+                for (const auto& existing : info.instances) {
+                    if (existing.instanceName == inst.instanceName) { found = true; break; }
+                }
+                if (!found) info.instances.push_back(inst);
+            }
+            next++;
+        }
+    }
 
     std::error_code ec;
     for (const auto& entry : fs::directory_iterator(engineDir, ec)) {
         if (!entry.is_directory(ec)) continue;
         std::string name = entry.path().filename().string();
 
-        // Skip known non-instance directories
         if (name == "Manager" || name == "UserData") continue;
 
-        // Validate: a real instance directory contains a .bstk file
         bool hasBstk = false;
         for (const auto& f : fs::directory_iterator(entry.path(), ec)) {
             if (f.path().extension() == ".bstk") { hasBstk = true; break; }
         }
-        if (hasBstk)
-            info.instances.push_back(name);
+        if (hasBstk) {
+            bool found = false;
+            for (const auto& inst : info.instances) {
+                if (inst.instanceName == name) { found = true; break; }
+            }
+            if (!found) {
+                BstkInstance inst;
+                inst.displayName = name;
+                inst.instanceName = name;
+                info.instances.push_back(inst);
+            }
+        }
     }
 }
 
@@ -113,12 +140,11 @@ void RootTool::RefreshEmulatorInfo() {
     init(m_bluestacks, true,  "SOFTWARE\\BlueStacks_nxt",  "BlueStacks 5");
     init(m_msi,        false, "SOFTWARE\\BlueStacks_msi5", "MSI App Player");
 
-    // Auto-select first available instance
-    if (!m_bluestacks.instances.empty())  m_selectedInstance = m_bluestacks.instances[0];
-    else if (!m_msi.instances.empty())    m_selectedInstance = m_msi.instances[0];
+    if (!m_bluestacks.instances.empty())  m_selectedInstance = m_bluestacks.instances[0].instanceName;
+    else if (!m_msi.instances.empty())    m_selectedInstance = m_msi.instances[0].instanceName;
 }
 
-// ─── File Helpers ─────────────────────────────────────────────────────────────
+
 
 std::string RootTool::ReadFileString(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -133,28 +159,34 @@ bool RootTool::WriteFileString(const std::string& path, const std::string& conte
     return f.good();
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 
 bool RootTool::IsMasterInstance(const std::string& instanceName) {
-    // Master instances do NOT have _1, _2, _3 etc. suffix
-    // e.g. "Pie64" is master, "Pie64_1" is a clone
     std::regex suffixPattern(".*_\\d+$");
     return !std::regex_match(instanceName, suffixPattern);
 }
 
-// ─── Actions ──────────────────────────────────────────────────────────────────
+std::string RootTool::GetMasterInstanceName(const std::string& instanceName) {
+    std::regex suffixPattern("^(.+)_\\d+$");
+    std::smatch match;
+    if (std::regex_match(instanceName, match, suffixPattern))
+        return match[1].str();
+    return instanceName;
+}
+
+
 
 void RootTool::KillProcesses() {
     KillProcessByName("HD-Player.exe");
     KillProcessByName("HD-MultiInstanceManager.exe");
     KillProcessByName("BstkSVC.exe");
-    Log("[+] Emulator processes killed.");
+    SetStatus("Emulator processes stopped.", false);
 }
 
 void RootTool::PatchHDPlayer(const std::string& installDir) {
     if (installDir.empty()) { Log("[!] InstallDir not found.", true); return; }
 
-    // Auto-kill emulator first
+
     Log("[*] Killing emulator processes...");
     KillProcesses();
     ::Sleep(1000);
@@ -164,7 +196,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
 
     if (!fs::exists(exePath)) { Log("[!] HD-Player.exe not found: " + exePath, true); return; }
 
-    // Backup (only once)
+
     if (!fs::exists(bakPath)) {
         std::error_code ec;
         fs::copy_file(exePath, bakPath, ec);
@@ -174,7 +206,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         Log("[*] Backup already exists, skipping copy.");
     }
 
-    // Read binary into memory
+
     std::ifstream f(exePath, std::ios::binary | std::ios::ate);
     if (!f) { Log("[!] Cannot open HD-Player.exe. Close the emulator first.", true); return; }
     std::vector<uint8_t> buf(static_cast<size_t>(f.tellg()));
@@ -185,7 +217,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
     snprintf(msg, sizeof(msg), "[*] Loaded %s (%zu bytes)", exePath.c_str(), buf.size());
     Log(msg);
 
-    // ── PE helpers (inline lambdas) ──────────────────────────────────────────
+
     auto rd32 = [&](size_t off) -> uint32_t {
         if (off + 4 > buf.size()) return 0;
         return (uint32_t)buf[off] | ((uint32_t)buf[off+1]<<8) |
@@ -196,7 +228,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         return (uint16_t)buf[off] | ((uint16_t)buf[off+1]<<8);
     };
 
-    // ── Parse PE header ─────────────────────────────────────────────────────
+
     if (buf.size() < 0x40) { Log("[!] File too small for PE.", true); return; }
     size_t peOff = rd32(0x3C);
     if (peOff + 24 >= buf.size() || buf[peOff] != 'P' || buf[peOff+1] != 'E') {
@@ -207,7 +239,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
     size_t optHdrSize  = rd16(peOff + 20);
     size_t secTableOff = peOff + 24 + optHdrSize;
 
-    // Section info
+
     struct SecInfo { char name[9]{}; uint32_t va, vsz, rawOff, rawSz; };
     std::vector<SecInfo> secs;
     for (int i = 0; i < numSections; i++) {
@@ -222,7 +254,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         secs.push_back(si);
     }
 
-    // Find .text and .rdata sections
+
     const SecInfo* textSec = nullptr;
     for (auto& s : secs)
         if (strncmp(s.name, ".text", 5) == 0) { textSec = &s; break; }
@@ -231,7 +263,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
     size_t textStart = textSec->rawOff;
     size_t textEnd   = textSec->rawOff + textSec->rawSz;
 
-    // RVA-to-file-offset converter
+
     auto rvaToFile = [&](uint32_t rva) -> size_t {
         for (auto& s : secs)
             if (rva >= s.va && rva < s.va + s.vsz)
@@ -239,7 +271,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         return (size_t)-1;
     };
 
-    // Search buffer for ASCII string, returns file offsets
+
     auto findString = [&](const char* str, size_t start = 0, size_t end = (size_t)-1) {
         std::vector<size_t> hits;
         size_t len = strlen(str);
@@ -251,7 +283,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         return hits;
     };
 
-    // Check: test al,al (84 C0) + jz (74 XX) preceded immediately by CALL (E8 XX XX XX XX)
+
     auto isTestJzAfterCall = [&](size_t testOff) -> bool {
         if (testOff + 4 > buf.size()) return false;
         if (buf[testOff] != 0x84 || buf[testOff+1] != 0xC0) return false;
@@ -260,14 +292,12 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         return (buf[testOff - 5] == 0xE8);
     };
 
-    // ═════════════════════════════════════════════════════════════════════════
-    //  UNIVERSAL PATCH-SITE FINDER (4 strategies from patcher_tool)
-    // ═════════════════════════════════════════════════════════════════════════
+
     size_t patchOffset = std::string::npos;
     int    patchMethod = 0;
     std::string patchMethodDesc;
 
-    // Helper: scan .text for LEA xrefs to a given RVA, walk backward for test+jz
+
     auto findViaStringAnchor = [&](const char* anchor, int method,
                                     const char* methodName, int backRange) -> bool
     {
@@ -278,7 +308,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         Log(msg);
 
         for (size_t strFileOff : strHits) {
-            // Calculate RVA of this string
+
             uint32_t strRva = 0;
             for (auto& s : secs) {
                 if (strFileOff >= s.rawOff && strFileOff < s.rawOff + s.rawSz) {
@@ -288,7 +318,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
             }
             if (strRva == 0) continue;
 
-            // Scan .text for LEA instructions referencing this string via RIP-relative
+
             for (size_t i = textStart; i + 7 <= textEnd; i++) {
                 bool isLea = false;
                 int leaLen = 7;
@@ -306,7 +336,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
                 uint32_t targetRva = instrRva + leaLen + disp;
                 if (targetRva != strRva) continue;
 
-                // Walk backward from LEA to find test al,al + jz
+
                 size_t searchStart = (i > textStart + (size_t)backRange)
                                      ? i - backRange : textStart;
                 for (size_t j = i - 2; j >= searchStart && j < i; j--) {
@@ -326,21 +356,21 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
         return false;
     };
 
-    // ── Strategy 1: Anchor on "Verified the disk integrity!" ──────────────
+
     Log("[*] Strategy 1: Searching for \"Verified the disk integrity!\" anchor...");
     if (!findViaStringAnchor("Verified the disk integrity!", 1,
                               "Anchor: \"Verified the disk integrity!\"", 80))
     {
         Log("[~]   Strategy 1 failed.");
 
-        // ── Strategy 2: Anchor on "plrDiskCheckThreadEntry" ──────────────
+
         Log("[*] Strategy 2: Searching for \"plrDiskCheckThreadEntry\" anchor...");
         if (!findViaStringAnchor("plrDiskCheckThreadEntry", 2,
                                   "Anchor: \"plrDiskCheckThreadEntry\"", 0x700))
         {
             Log("[~]   Strategy 2 failed.");
 
-            // ── Strategy 3: Anchor on shutdown message ───────────────────
+
             Log("[*] Strategy 3: Searching for shutdown tamper message anchor...");
             if (!findViaStringAnchor(
                     "Shutting down: disk file have been illegally tampered with!", 3,
@@ -348,7 +378,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
             {
                 Log("[~]   Strategy 3 failed.");
 
-                // ── Strategy 4: Full .text scan with validation ──────────
+
                 Log("[*] Strategy 4: Full .text scan for CALL+test+jz pattern...");
                 std::vector<size_t> candidates;
                 for (size_t i = textStart + 5; i + 4 <= textEnd; i++) {
@@ -368,7 +398,7 @@ void RootTool::PatchHDPlayer(const std::string& installDir) {
                         buf[patchOffset+2], buf[patchOffset+3]);
                     Log(msg);
                 } else if (candidates.size() > 1) {
-                    // Narrow down by checking for "Verified" or "Failed to verify" LEA nearby
+
                     auto verifyHits = findString("Verified the disk integrity!");
                     auto failHits   = findString("Failed to verify the disk integrity!");
 
@@ -417,13 +447,13 @@ done_search:
              patchMethodDesc.c_str(), patchMethod);
     Log(msg);
 
-    // Already patched?
+
     if (buf[patchOffset+2] == 0x90 && buf[patchOffset+3] == 0x90) {
         Log("[~] Already patched. Nothing to do.");
         return;
     }
 
-    // Apply: 74 ?? -> 90 90  (jz rel8 -> NOP NOP)
+
     snprintf(msg, sizeof(msg), "[*] Patching at 0x%zX: %02X %02X -> 90 90",
              patchOffset + 2, buf[patchOffset+2], buf[patchOffset+3]);
     Log(msg);
@@ -432,9 +462,9 @@ done_search:
 
     std::ofstream out(exePath, std::ios::binary);
     if (!out || !out.write(reinterpret_cast<const char*>(buf.data()), (std::streamsize)buf.size()))
-        Log("[!] Failed to write HD-Player.exe -- run as Administrator.", true);
+        SetStatus("Failed to patch — run as Administrator.", true);
     else
-        Log("[+] Patched successfully!");
+        SetStatus("Patched successfully!", false);
 }
 
 void RootTool::ApplyRootConfigs(const std::string& dataDir, const std::string& instanceName) {
@@ -442,17 +472,17 @@ void RootTool::ApplyRootConfigs(const std::string& dataDir, const std::string& i
         Log("[!] DataDir or instance name is empty.", true); return;
     }
 
-    // Auto-kill emulator first
+
     Log("[*] Killing emulator processes...");
     KillProcesses();
     ::Sleep(1000);
 
-    // Resolve paths: DataDir may already be the Engine dir
+
     std::string engineDir = dataDir;
     if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/')
         engineDir += '\\';
 
-    // ── .bstk file ─────────────────────────────────────────────────────
+
     std::string instanceDir = engineDir + instanceName + "\\";
     std::string bstkPath    = instanceDir + instanceName + ".bstk";
 
@@ -475,13 +505,13 @@ void RootTool::ApplyRootConfigs(const std::string& dataDir, const std::string& i
             result += line + "\n";
         }
 
-        if (!WriteFileString(filepath, result))
-            Log("[!] Failed to write " + filepath + " — run as Administrator.", true);
-        else
-            Log("[+] " + filepath + " updated (Readonly -> Normal).");
+        if (!WriteFileString(filepath, result)) {
+            SetStatus("Failed to update .bstk — run as Administrator.", true);
+            return;
+        }
     }
 
-    Log("[+] Disk R/W configs applied.");
+    SetStatus("Disk set to R/W.", false);
 }
 
 void RootTool::RevertDiskToReadonly(const std::string& dataDir, const std::string& instanceName) {
@@ -489,12 +519,12 @@ void RootTool::RevertDiskToReadonly(const std::string& dataDir, const std::strin
         Log("[!] DataDir or instance name is empty.", true); return;
     }
 
-    // Auto-kill emulator first
+
     Log("[*] Killing emulator processes...");
     KillProcesses();
     ::Sleep(1000);
 
-    // Resolve paths
+
     std::string engineDir = dataDir;
     if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/')
         engineDir += '\\';
@@ -521,41 +551,34 @@ void RootTool::RevertDiskToReadonly(const std::string& dataDir, const std::strin
             result += line + "\n";
         }
 
-        if (!WriteFileString(filepath, result))
-            Log("[!] Failed to write " + filepath + " — run as Administrator.", true);
-        else
-            Log("[+] " + filepath + " reverted (Normal -> Readonly).");
+        if (!WriteFileString(filepath, result)) {
+            SetStatus("Failed to update .bstk — run as Administrator.", true);
+            return;
+        }
     }
 
-    Log("[+] Disk reverted to Readonly.");
+    SetStatus("Disk reverted to Readonly.", false);
 }
 
-// ─── OneClickRoot ─────────────────────────────────────────────────────────────
-// Uses VHDManager (ext4handle) to directly manipulate the VHD:
-//   open VHD → mount ext4 → create dir → copy su → set perms → unmount
 
-void RootTool::OneClickRoot(const std::string& dataDir, const std::string& instanceName) {
-    if (dataDir.empty() || instanceName.empty()) {
+
+void RootTool::OneClickRoot(const std::string& dataDir, const std::string& selectedInstance) {
+    if (dataDir.empty() || selectedInstance.empty()) {
         Log("[!] DataDir or instance name is empty.", true); return;
     }
 
-    // Only works on master instances (no _1, _2 suffix)
-    if (!IsMasterInstance(instanceName)) {
-        Log("[!] One Click Root only works on master instances (without _1, _2 suffix).", true);
-        Log("[~] Instance '" + instanceName + "' appears to be a clone.", true);
-        return;
-    }
+    std::string masterInst = GetMasterInstanceName(selectedInstance);
 
-    // Auto-kill emulator first
+
     Log("[*] Killing emulator processes...");
     KillProcesses();
     ::Sleep(1000);
 
-    // ── Locate Root.vhd ─────────────────────────────────────────────────────
+
     std::string engineDir = dataDir;
     if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/')
         engineDir += '\\';
-    std::string instanceDir = engineDir + instanceName + "\\";
+    std::string instanceDir = engineDir + masterInst + "\\";
     std::string vhdPath     = instanceDir + "Root.vhd";
 
     if (!fs::exists(vhdPath)) {
@@ -564,39 +587,46 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
     }
     Log("[*] Found Root.vhd: " + vhdPath);
 
-    // ── Extract embedded su_c resource to temp file ─────────────────────────
+
     HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(IDR_SU_BINARY), RT_RCDATA);
     if (!hRes) {
-        Log("[!] Embedded su_c resource not found in EXE.", true);
+        SetStatus("Internal error: su resource missing.", true);
         return;
     }
     HGLOBAL hData = LoadResource(nullptr, hRes);
     if (!hData) {
-        Log("[!] Failed to load embedded su_c resource.", true);
+        SetStatus("Internal error: su resource load failed.", true);
         return;
     }
     DWORD    suSize = SizeofResource(nullptr, hRes);
     const void* suData = LockResource(hData);
     if (!suData || suSize == 0) {
-        Log("[!] Embedded su_c resource is empty.", true);
+        SetStatus("Internal error: su resource empty.", true);
         return;
     }
 
-    // Write to a temp file for VHDManager::CopyFileFromHost
+
+    constexpr uint8_t kXorKey = 0xA7;
+    std::vector<uint8_t> suDecrypted(suSize);
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(suData);
+    for (DWORD i = 0; i < suSize; i++)
+        suDecrypted[i] = src[i] ^ kXorKey;
+
+
     char tempDir[MAX_PATH]{};
     ::GetTempPathA(MAX_PATH, tempDir);
     std::string resSuC = std::string(tempDir) + "bstk_su_c.tmp";
     {
         std::ofstream tmp(resSuC, std::ios::binary);
         if (!tmp) {
-            Log("[!] Cannot create temp file for su binary.", true);
+            SetStatus("Failed to create temp file.", true);
             return;
         }
-        tmp.write(reinterpret_cast<const char*>(suData), suSize);
+        tmp.write(reinterpret_cast<const char*>(suDecrypted.data()), suSize);
     }
-    Log("[*] Extracted embedded su_c (" + std::to_string(suSize) + " bytes) to temp.");
+    Log("[*] Decrypted embedded su (" + std::to_string(suSize) + " bytes) to temp.");
 
-    // ── Open VHD via VHDManager ─────────────────────────────────────────────
+
     VHDManager vhd;
 
     Log("[*] Opening VHD...");
@@ -606,7 +636,7 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
     }
     Log("[+] VHD opened successfully.");
 
-    // ── Find and mount ext4 partition ────────────────────────────────────────
+
     const auto& partitions = vhd.GetPartitions();
     Log("[*] Found " + std::to_string(partitions.size()) + " partition(s).");
 
@@ -635,7 +665,7 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
     }
     Log("[+] ext4 partition mounted.");
 
-    // ── Create /android/system/xbin directory ───────────────────────────────
+
     std::string xbinDir = "/android/system/xbin";
     Log("[*] Creating " + xbinDir + " directory...");
     if (vhd.MakeDirectory(xbinDir)) {
@@ -644,18 +674,18 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
         Log("[~] Directory may already exist: " + vhd.GetLastError());
     }
 
-    // ── Copy su_c → /android/system/xbin/su ─────────────────────────────────
+
     std::string suDest = "/android/system/xbin/su";
     Log("[*] Copying su_c -> " + suDest + "...");
     if (!vhd.CopyFileFromHost(resSuC, suDest)) {
-        Log("[!] Failed to copy su binary: " + vhd.GetLastError(), true);
+        SetStatus("Failed to write su binary.", true);
         vhd.UnmountExt4();
         vhd.CloseVHD();
         return;
     }
     Log("[+] su binary copied.");
 
-    // ── Set permissions to 06755 (setuid + setgid + rwxr-xr-x) ─────────────
+
     Log("[*] Setting permissions 06755 (suid/sgid)...");
     if (vhd.SetFilePermissions(suDest, 06755)) {
         Log("[+] Permissions set: 06755");
@@ -663,7 +693,7 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
         Log("[!] chmod failed: " + vhd.GetLastError(), true);
     }
 
-    // ── Set owner to root:root (uid=0, gid=0) ──────────────────────────────
+
     Log("[*] Setting owner root:root (0:0)...");
     if (vhd.SetFileOwner(suDest, 0, 0)) {
         Log("[+] Owner set: root:root");
@@ -671,43 +701,69 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& insta
         Log("[!] chown failed: " + vhd.GetLastError(), true);
     }
 
-    // ── Unmount and close ───────────────────────────────────────────────────
+
     Log("[*] Unmounting ext4...");
     vhd.UnmountExt4();
     Log("[*] Closing VHD...");
     vhd.CloseVHD();
 
-    // Clean up temp file
+
     fs::remove(resSuC);
 
-    Log("[+] One Click Root complete! su installed at /system/xbin/su");
+
+    std::string confDir = dataDir;
+    if (!confDir.empty() && confDir.back() != '\\' && confDir.back() != '/') confDir += '\\';
+    {
+        std::string lowerConf = confDir;
+        for (auto& ch : lowerConf) ch = (char)tolower((unsigned char)ch);
+        size_t ePos = lowerConf.find("engine\\");
+        if (ePos != std::string::npos && ePos + 7 == lowerConf.length()) {
+            confDir = confDir.substr(0, ePos);
+        }
+    }
+    std::string confPath = confDir + "bluestacks.conf";
+    if (fs::exists(confPath)) {
+        Log("[*] Updating bluestacks.conf for " + selectedInstance);
+        std::string confContent = ReadFileString(confPath);
+        std::string searchKey = "bst.instance." + selectedInstance + ".enable_root_access=";
+        std::string newConf;
+        std::istringstream ss(confContent);
+        std::string line;
+        bool replaced = false;
+        while (std::getline(ss, line)) {
+            if (line.find(searchKey) != std::string::npos) {
+                line = searchKey + "\"0\"";
+                replaced = true;
+            }
+            newConf += line + "\n";
+        }
+        if (!replaced) newConf += searchKey + "\"0\"\n";
+        if (WriteFileString(confPath, newConf)) Log("[+] bluestacks.conf updated.");
+        else Log("[!] Failed to write bluestacks.conf", true);
+    }
+
+    SetStatus("Rooted successfully!", false);
 }
 
-// ─── OneClickUnroot ───────────────────────────────────────────────────────────
-// Delete su from VHD to reverse rooting
 
-void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& instanceName) {
-    if (dataDir.empty() || instanceName.empty()) {
+
+void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& selectedInstance) {
+    if (dataDir.empty() || selectedInstance.empty()) {
         Log("[!] DataDir or instance name is empty.", true); return;
     }
 
-    // Only works on master instances
-    if (!IsMasterInstance(instanceName)) {
-        Log("[!] One Click Unroot only works on master instances (without _1, _2 suffix).", true);
-        Log("[~] Instance '" + instanceName + "' appears to be a clone.", true);
-        return;
-    }
+    std::string masterInst = GetMasterInstanceName(selectedInstance);
 
-    // Auto-kill emulator first
+
     Log("[*] Killing emulator processes...");
     KillProcesses();
     ::Sleep(1000);
 
-    // ── Locate Root.vhd ─────────────────────────────────────────────────────
+
     std::string engineDir = dataDir;
     if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/')
         engineDir += '\\';
-    std::string instanceDir = engineDir + instanceName + "\\";
+    std::string instanceDir = engineDir + masterInst + "\\";
     std::string vhdPath     = instanceDir + "Root.vhd";
 
     if (!fs::exists(vhdPath)) {
@@ -716,7 +772,7 @@ void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& ins
     }
     Log("[*] Found Root.vhd: " + vhdPath);
 
-    // ── Open VHD via VHDManager ─────────────────────────────────────────────
+
     VHDManager vhd;
 
     Log("[*] Opening VHD...");
@@ -726,7 +782,7 @@ void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& ins
     }
     Log("[+] VHD opened.");
 
-    // ── Find and mount ext4 partition ────────────────────────────────────────
+
     const auto& partitions = vhd.GetPartitions();
     int ext4Index = -1;
     for (size_t i = 0; i < partitions.size(); i++) {
@@ -748,72 +804,78 @@ void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& ins
     }
     Log("[+] ext4 partition mounted.");
 
-    // ── Delete /android/system/xbin/su ──────────────────────────────────────
+
     std::string suPath = "/android/system/xbin/su";
     if (vhd.FileExists(suPath)) {
         Log("[*] Deleting " + suPath + "...");
         if (vhd.DeleteFile(suPath)) {
-            Log("[+] su binary deleted.");
         } else {
-            Log("[!] Failed to delete su: " + vhd.GetLastError(), true);
+            SetStatus("Failed to remove su binary.", true);
         }
     } else {
         Log("[~] su binary not found at " + suPath + " — already unrooted.");
     }
 
-    // ── Unmount and close ───────────────────────────────────────────────────
+
     Log("[*] Unmounting ext4...");
     vhd.UnmountExt4();
     Log("[*] Closing VHD...");
     vhd.CloseVHD();
 
-    Log("[+] One Click Unroot complete! su removed from VHD.");
+    SetStatus("Unrooted successfully!", false);
 }
 
-// ─── UI ───────────────────────────────────────────────────────────────────────
+
 
 void RootTool::SetupTheme() {
     ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding    = 6.0f;
+    s.WindowRounding    = 12.0f;
+    s.WindowPadding     = { 0, 0 };
     s.FrameRounding     = 4.0f;
     s.GrabRounding      = 4.0f;
     s.ScrollbarRounding = 4.0f;
-    s.FramePadding      = { 8, 5 };
-    s.ItemSpacing       = { 8, 6 };
-    s.WindowPadding     = { 12, 12 };
-    s.IndentSpacing     = 16.0f;
+    s.FramePadding      = { 12, 10 };
+    s.ItemSpacing       = { 12, 12 };
+    s.WindowBorderSize  = 0.0f;
+    s.FrameBorderSize   = 0.0f;
 
     ImVec4* c = s.Colors;
-    c[ImGuiCol_WindowBg]          = { 0.07f, 0.07f, 0.07f, 1.00f };
-    c[ImGuiCol_ChildBg]           = { 0.05f, 0.05f, 0.05f, 1.00f };
-    c[ImGuiCol_PopupBg]           = { 0.10f, 0.10f, 0.10f, 1.00f };
-    c[ImGuiCol_Border]            = { 0.15f, 0.30f, 0.15f, 0.60f };
-    c[ImGuiCol_TitleBg]           = { 0.02f, 0.14f, 0.02f, 1.00f };
-    c[ImGuiCol_TitleBgActive]     = { 0.02f, 0.20f, 0.02f, 1.00f };
-    c[ImGuiCol_MenuBarBg]         = { 0.05f, 0.10f, 0.05f, 1.00f };
-    c[ImGuiCol_Header]            = { 0.10f, 0.35f, 0.10f, 0.70f };
-    c[ImGuiCol_HeaderHovered]     = { 0.15f, 0.50f, 0.15f, 0.80f };
-    c[ImGuiCol_HeaderActive]      = { 0.10f, 0.40f, 0.10f, 1.00f };
-    c[ImGuiCol_Button]            = { 0.10f, 0.38f, 0.10f, 1.00f };
-    c[ImGuiCol_ButtonHovered]     = { 0.18f, 0.58f, 0.18f, 1.00f };
-    c[ImGuiCol_ButtonActive]      = { 0.08f, 0.30f, 0.08f, 1.00f };
-    c[ImGuiCol_FrameBg]           = { 0.10f, 0.10f, 0.10f, 1.00f };
-    c[ImGuiCol_FrameBgHovered]    = { 0.14f, 0.22f, 0.14f, 1.00f };
-    c[ImGuiCol_FrameBgActive]     = { 0.12f, 0.30f, 0.12f, 1.00f };
-    c[ImGuiCol_CheckMark]         = { 0.30f, 0.90f, 0.30f, 1.00f };
-    c[ImGuiCol_SliderGrab]        = { 0.25f, 0.75f, 0.25f, 1.00f };
-    c[ImGuiCol_SliderGrabActive]  = { 0.35f, 0.95f, 0.35f, 1.00f };
-    c[ImGuiCol_SeparatorHovered]  = { 0.20f, 0.65f, 0.20f, 1.00f };
-    c[ImGuiCol_SeparatorActive]   = { 0.25f, 0.80f, 0.25f, 1.00f };
-    c[ImGuiCol_Tab]               = { 0.06f, 0.20f, 0.06f, 1.00f };
-    c[ImGuiCol_TabHovered]        = { 0.18f, 0.55f, 0.18f, 1.00f };
-    c[ImGuiCol_TabActive]         = { 0.12f, 0.40f, 0.12f, 1.00f };
-    c[ImGuiCol_ScrollbarBg]       = { 0.04f, 0.04f, 0.04f, 1.00f };
-    c[ImGuiCol_ScrollbarGrab]     = { 0.15f, 0.40f, 0.15f, 1.00f };
-    c[ImGuiCol_ScrollbarGrabHovered] = { 0.22f, 0.58f, 0.22f, 1.00f };
-    c[ImGuiCol_ScrollbarGrabActive]  = { 0.12f, 0.32f, 0.12f, 1.00f };
-    c[ImGuiCol_Text]              = { 0.88f, 0.95f, 0.88f, 1.00f };
-    c[ImGuiCol_TextDisabled]      = { 0.45f, 0.55f, 0.45f, 1.00f };
+    c[ImGuiCol_WindowBg]             = { 0.f, 0.f, 0.f, 0.f };  
+    c[ImGuiCol_ChildBg]              = { 0.f, 0.f, 0.f, 0.f }; 
+    c[ImGuiCol_Border]               = { 0.08f, 0.09f, 0.10f, 1.0f };
+    c[ImGuiCol_FrameBg]              = { 0.08f, 0.08f, 0.11f, 1.0f };
+    c[ImGuiCol_FrameBgHovered]       = { 0.10f, 0.10f, 0.14f, 1.0f };
+    c[ImGuiCol_FrameBgActive]        = { 0.15f, 0.14f, 0.21f, 1.0f };
+    
+    c[ImGuiCol_Button]               = { 0.08f, 0.08f, 0.11f, 1.0f };
+    c[ImGuiCol_ButtonHovered]        = { 0.10f, 0.10f, 0.14f, 1.0f };
+    c[ImGuiCol_ButtonActive]         = { 0.56f, 0.52f, 1.0f, 1.0f };
+
+    c[ImGuiCol_Header]               = { 0.08f, 0.08f, 0.11f, 1.0f };
+    c[ImGuiCol_HeaderHovered]        = { 0.10f, 0.10f, 0.14f, 1.0f };
+    c[ImGuiCol_HeaderActive]         = { 0.15f, 0.14f, 0.21f, 1.0f };
+
+    c[ImGuiCol_CheckMark]            = { 0.56f, 0.52f, 1.0f, 1.0f };
+    c[ImGuiCol_SliderGrab]           = { 0.56f, 0.52f, 1.0f, 1.0f };
+    c[ImGuiCol_SliderGrabActive]     = { 0.60f, 0.58f, 1.0f, 1.0f };
+
+    c[ImGuiCol_MenuBarBg]            = { 0.f, 0.f, 0.f, 0.f };
+    c[ImGuiCol_TitleBg]              = { 0.f, 0.f, 0.f, 0.f };
+    c[ImGuiCol_TitleBgActive]        = { 0.f, 0.f, 0.f, 0.f };
+
+    c[ImGuiCol_Text]                 = { 1.00f, 1.00f, 1.00f, 1.0f };
+    c[ImGuiCol_TextDisabled]         = { 0.41f, 0.41f, 0.47f, 1.0f };
+
+    c[ImGuiCol_PopupBg]              = { 0.06f, 0.06f, 0.09f, 0.98f };
+    c[ImGuiCol_ScrollbarBg]          = { 0.0f, 0.0f, 0.0f, 0.0f };
+    c[ImGuiCol_ScrollbarGrab]        = { 1.0f, 1.0f, 1.0f, 0.15f };
+    c[ImGuiCol_ScrollbarGrabHovered] = { 1.0f, 1.0f, 1.0f, 0.25f };
+    c[ImGuiCol_ScrollbarGrabActive]  = { 1.0f, 1.0f, 1.0f, 0.35f };
+    c[ImGuiCol_Separator]            = { 1.0f, 1.0f, 1.0f, 0.08f };
+    c[ImGuiCol_SeparatorHovered]     = { 1.0f, 1.0f, 1.0f, 0.12f };
+    c[ImGuiCol_SeparatorActive]      = { 1.0f, 1.0f, 1.0f, 0.20f };
+    s.PopupRounding = 6.0f;
+    s.PopupBorderSize = 1.0f;
 }
 
 void RootTool::RenderUI() {
@@ -827,144 +889,244 @@ void RootTool::RenderUI() {
 
     ImGui::Begin("##root_main", nullptr, kWinFlags);
 
-    // ── Title bar ────────────────────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.95f, 0.30f, 1.0f));
-    ImGui::Text(" BSTK ROOTER");
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::TextDisabled("BlueStacks 5 / MSI App Player");
-    ImGui::Separator();
-    ImGui::Spacing();
+    ImVec2 pos = ImGui::GetWindowPos();
+    ImVec2 size = ImGui::GetWindowSize();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
 
-    // ── Emulator selection ───────────────────────────────────────────────────
-    ImGui::Text("Emulator:");
-    ImGui::SameLine();
-    bool bstk = (m_selectedEmulator == 0);
-    if (ImGui::RadioButton("BlueStacks 5",  bstk))  { m_selectedEmulator = 0; m_selectedInstance.clear(); RefreshEmulatorInfo(); }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("MSI App Player", !bstk)) { m_selectedEmulator = 1; m_selectedInstance.clear(); RefreshEmulatorInfo(); }
 
-    EmulatorInfo& emu = (m_selectedEmulator == 0) ? m_bluestacks : m_msi;
+    ImColor acc = ImColor(142, 132, 255, 60);
+    ImColor acc0 = ImColor(142, 132, 255, 0);
+    ImColor bg = ImColor(0, 0, 0, 200);
+    ImColor border = ImColor(21, 23, 26, 255);
+    float r = 12.0f;
+    float r2 = 8.0f;
+    float sidebarW = 110.0f;
 
-    ImGui::Spacing();
 
-    // ── Path info ────────────────────────────────────────────────────────────
-    auto LabeledPath = [](const char* label, const std::string& val) {
-        ImGui::TextDisabled("%s", label);
-        ImGui::SameLine();
-        if (val.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.25f, 0.25f, 1.0f));
-            ImGui::Text("NOT FOUND");
-            ImGui::PopStyleColor();
-        } else {
-            ImGui::TextUnformatted(val.c_str());
-        }
-    };
+    draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg, r);
+    draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), border, r);
 
-    LabeledPath("Install Dir: ", emu.installDir);
-    LabeledPath("Data Dir:    ", emu.dataDir);
 
-    ImGui::Spacing();
+    ImVec2 cMin = ImVec2(pos.x + sidebarW, pos.y + 15);
+    ImVec2 cMax = ImVec2(pos.x + size.x - 15, pos.y + size.y - 15);
+    draw->AddRectFilled(cMin, cMax, ImColor(13, 13, 18, 255), r2);
+    draw->AddRect(cMin, cMax, ImColor(19, 18, 26, 255), r2);
 
-    // ── Instance selector ────────────────────────────────────────────────────
-    ImGui::Text("Instance:");
-    ImGui::SameLine();
 
-    // Sync selected instance when emulator switches
-    if (!emu.instances.empty() && m_selectedInstance.empty())
-        m_selectedInstance = emu.instances[0];
+    draw->AddRectFilledMultiColor(ImVec2(pos.x + size.x / 2.0f, pos.y), ImVec2(pos.x + size.x, pos.y + 2), acc, acc0, acc0, acc);
+    draw->AddRectFilledMultiColor(ImVec2(pos.x, pos.y), ImVec2(pos.x + size.x / 2.0f, pos.y + 2), acc0, acc, acc, acc0);
+    draw->AddRectFilledMultiColor(ImVec2(pos.x + size.x / 2.0f, pos.y + size.y - 2), ImVec2(pos.x + size.x, pos.y + size.y), acc, acc0, acc0, acc);
+    draw->AddRectFilledMultiColor(ImVec2(pos.x, pos.y + size.y - 2), ImVec2(pos.x + size.x / 2.0f, pos.y + size.y), acc0, acc, acc, acc0);
 
-    ImGui::SetNextItemWidth(200);
-    if (ImGui::BeginCombo("##inst", m_selectedInstance.empty() ? "(none found)" : m_selectedInstance.c_str())) {
-        for (const auto& inst : emu.instances) {
-            bool sel = (m_selectedInstance == inst);
-            if (ImGui::Selectable(inst.c_str(), sel)) m_selectedInstance = inst;
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
+
+    {
+        extern HWND g_hWnd;
+        float titleH = 36.0f;
+        float btnSize = 28.0f;
+        float btnY = pos.y + (titleH - btnSize) / 2.0f;
+        float rightEdge = pos.x + size.x - 15.0f;
+
+
+
+
+        ImVec2 closeBtnMin = ImVec2(rightEdge - btnSize, btnY);
+        ImVec2 closeBtnMax = ImVec2(rightEdge, btnY + btnSize);
+        bool closeHovered = ImGui::IsMouseHoveringRect(closeBtnMin, closeBtnMax);
+        draw->AddRectFilled(closeBtnMin, closeBtnMax,
+            closeHovered ? ImColor(232, 17, 35, 255) : ImColor(255, 255, 255, 15), 4.0f);
+
+        float cx = (closeBtnMin.x + closeBtnMax.x) / 2.0f;
+        float cy = (closeBtnMin.y + closeBtnMax.y) / 2.0f;
+        float hs = 5.0f;
+        draw->AddLine(ImVec2(cx - hs, cy - hs), ImVec2(cx + hs, cy + hs), ImColor(255, 255, 255, 255), 1.5f);
+        draw->AddLine(ImVec2(cx + hs, cy - hs), ImVec2(cx - hs, cy + hs), ImColor(255, 255, 255, 255), 1.5f);
+        if (closeHovered && ImGui::IsMouseClicked(0))
+            ::PostMessage(g_hWnd, WM_CLOSE, 0, 0);
+
+
+        ImVec2 minBtnMin = ImVec2(rightEdge - btnSize * 2 - 6, btnY);
+        ImVec2 minBtnMax = ImVec2(rightEdge - btnSize - 6, btnY + btnSize);
+        bool minHovered = ImGui::IsMouseHoveringRect(minBtnMin, minBtnMax);
+        draw->AddRectFilled(minBtnMin, minBtnMax,
+            minHovered ? ImColor(255, 255, 255, 30) : ImColor(255, 255, 255, 15), 4.0f);
+
+        float mx = (minBtnMin.x + minBtnMax.x) / 2.0f;
+        float my = (minBtnMin.y + minBtnMax.y) / 2.0f;
+        draw->AddLine(ImVec2(mx - hs, my), ImVec2(mx + hs, my), ImColor(255, 255, 255, 255), 1.5f);
+        if (minHovered && ImGui::IsMouseClicked(0))
+            ::ShowWindow(g_hWnd, SW_MINIMIZE);
     }
 
-    // Show master/clone indicator
-    if (!m_selectedInstance.empty()) {
-        ImGui::SameLine();
-        if (IsMasterInstance(m_selectedInstance)) {
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "(Master)");
-        } else {
-            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "(Clone)");
-        }
+
+    const char* txt = "BSTK ROOTER";
+    float y_off = pos.y + size.y / 2.0f - 100.0f;
+    for (int i = 0; txt[i] != '\0'; i++) {
+        if (txt[i] == ' ') { y_off += 15.0f; continue; }
+        char b[2] = { txt[i], '\0' };
+        ImVec2 ts = ImGui::CalcTextSize(b);
+        draw->AddText(ImVec2(pos.x + sidebarW/2.0f - ts.x/2.0f, y_off), ImColor(255,255,255,255), b);
+        y_off += ts.y + 6.0f;
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
 
-    // ── Action buttons ───────────────────────────────────────────────────────
-    const float btnW = 260.0f;
-    const float btnH = 36.0f;
-    const bool  canAct = emu.found();
-    const bool  hasInstance = !m_selectedInstance.empty();
-    const bool  isMaster = hasInstance && IsMasterInstance(m_selectedInstance);
+    if (m_logoTexture) {
+        float logoSize = 100.0f;
+        float logoX = pos.x + sidebarW / 2.0f - logoSize / 2.0f;
+        float logoY = pos.y + 15.0f;
+        draw->AddImage((ImTextureID)m_logoTexture,
+                       ImVec2(logoX, logoY),
+                       ImVec2(logoX + logoSize, logoY + logoSize));
+    }
+    
 
-    auto StepBtn = [&](const char* label, bool enabled) -> bool {
-        if (!enabled) ImGui::BeginDisabled();
-        bool clicked = ImGui::Button(label, { btnW, btnH });
-        if (!enabled) ImGui::EndDisabled();
-        return clicked;
-    };
+    float vtx_center = pos.x + sidebarW/2.0f;
+    draw->AddRectFilledMultiColor(ImVec2(vtx_center - 1, pos.y + 50), ImVec2(vtx_center + 1, pos.y + size.y/2.0f - 110.0f), acc0, acc0, acc, acc);
+    draw->AddRectFilledMultiColor(ImVec2(vtx_center - 1, y_off + 10), ImVec2(vtx_center + 1, pos.y + size.y - 30.0f), acc, acc, acc0, acc0);
 
-    if (StepBtn("1.  Kill Emulator Processes", true))
-        KillProcesses();
+    float contentPad = 20.0f;
+    float contentLeft = sidebarW + contentPad;
+    float contentW = (size.x - 15.0f) - sidebarW - contentPad * 2.0f;
+    ImGui::SetCursorPos(ImVec2(contentLeft, 45.0f));
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  Stop HD-Player & services");
+    ImGui::BeginGroup();
+    {
+        ImGui::TextColored(ImVec4(0.56f, 0.52f, 1.0f, 1.0f), "CONFIGURATIONS");
+        ImGui::SameLine();
+        ImGui::TextDisabled("Select and Apply");
 
-    if (StepBtn("2.  Fix Illegally Tempered", canAct))
-        PatchHDPlayer(emu.installDir);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  Disk integrity bypass (auto-kills emu)");
+        ImGui::Text("Emulator: ");
+        ImGui::SameLine();
+        bool bstk = (m_selectedEmulator == 0);
+        if (ImGui::RadioButton("BlueStacks 5",  bstk))  { m_selectedEmulator = 0; m_selectedInstance.clear(); RefreshEmulatorInfo(); }
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        if (ImGui::RadioButton("MSI App Player", !bstk)) { m_selectedEmulator = 1; m_selectedInstance.clear(); RefreshEmulatorInfo(); }
 
-    if (StepBtn("3.  Disk R/W", canAct && hasInstance))
-        ApplyRootConfigs(emu.dataDir, m_selectedInstance);
+        EmulatorInfo& emu = (m_selectedEmulator == 0) ? m_bluestacks : m_msi;
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  .bstk: Readonly -> Normal (auto-kills emu)");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Install Dir: "); ImGui::SameLine(); ImGui::TextUnformatted(emu.installDir.c_str());
+        ImGui::TextDisabled("Data Dir:    "); ImGui::SameLine(); ImGui::TextUnformatted(emu.dataDir.c_str());
 
-    if (StepBtn("4.  Disk R/O (Revert)", canAct && hasInstance))
-        RevertDiskToReadonly(emu.dataDir, m_selectedInstance);
+        ImGui::Spacing();
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  .bstk: Normal -> Readonly (auto-kills emu)");
+        if (!emu.instances.empty() && m_selectedInstance.empty()) m_selectedInstance = emu.instances[0].instanceName;
 
-    if (StepBtn("5.  One Click Root", canAct && isMaster))
-        OneClickRoot(emu.dataDir, m_selectedInstance);
+        ImGui::Text("Instance:");
+        ImGui::SameLine();
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  Install su via VHD (master only, auto-kills emu)");
 
-    if (StepBtn("6.  One Click Unroot", canAct && isMaster))
-        OneClickUnroot(emu.dataDir, m_selectedInstance);
+        std::string displayPreview = "(none found)";
+        if (!m_selectedInstance.empty()) {
+            displayPreview = m_selectedInstance;
+            for (const auto& inst : emu.instances) {
+                if (inst.instanceName == m_selectedInstance) {
+                    displayPreview = inst.displayName + " (" + inst.instanceName + ")";
+                    break;
+                }
+            }
+        }
+        std::string btnLabel = displayPreview + "##inst_dropdown";
+        const char* preview = btnLabel.c_str();
+        ImVec2 headerSize(300, ImGui::GetFrameHeight());
+        ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 
-    ImGui::SameLine();
-    ImGui::TextDisabled("  Delete su from VHD (master only, auto-kills emu)");
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyle().Colors[ImGuiCol_FrameBgHovered]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_FrameBgActive]);
+        if (ImGui::Button(preview, headerSize))
+            m_showInstanceList = !m_showInstanceList;
+        ImGui::PopStyleColor(3);
 
-    // ── Console log ──────────────────────────────────────────────────────────
-    ImGui::Text("Log");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear")) { m_log.clear(); }
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.03f, 0.06f, 0.03f, 1.0f));
-    ImGui::BeginChild("##log", { 0, 0 }, true, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.60f, 0.95f, 0.60f, 1.0f));
-    ImGui::TextUnformatted(m_log.c_str());
-    ImGui::PopStyleColor();
-    if (m_scrollToBottom) { ImGui::SetScrollHereY(1.0f); m_scrollToBottom = false; }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float arrowX = cursorPos.x + headerSize.x - 20.0f;
+            float arrowY = cursorPos.y + headerSize.y / 2.0f - 2.0f;
+            if (m_showInstanceList) {
+                dl->AddTriangleFilled(ImVec2(arrowX, arrowY + 4), ImVec2(arrowX + 8, arrowY + 4), ImVec2(arrowX + 4, arrowY - 2), ImColor(255, 255, 255, 180));
+            } else {
+                dl->AddTriangleFilled(ImVec2(arrowX, arrowY), ImVec2(arrowX + 8, arrowY), ImVec2(arrowX + 4, arrowY + 6), ImColor(255, 255, 255, 180));
+            }
+        }
+
+
+        if (m_showInstanceList && !emu.instances.empty()) {
+            int maxVisible = (std::min)((int)emu.instances.size(), 5);
+            float listH = ImGui::GetTextLineHeightWithSpacing() * maxVisible + ImGui::GetStyle().FramePadding.y * 2;
+            if (ImGui::BeginListBox("##instlist", ImVec2(300, listH))) {
+                for (const auto& inst : emu.instances) {
+                    bool sel = (m_selectedInstance == inst.instanceName);
+                    std::string label = inst.displayName + " (" + inst.instanceName + ")##" + inst.instanceName;
+                    if (ImGui::Selectable(label.c_str(), sel)) {
+                        m_selectedInstance = inst.instanceName;
+                        m_showInstanceList = false;
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndListBox();
+            }
+        }
+        
+        if (!m_selectedInstance.empty()) {
+            ImGui::SameLine();
+            if (IsMasterInstance(m_selectedInstance)) {
+                ImGui::TextColored(ImVec4(0.56f, 0.52f, 1.0f, 1.0f), "[Master]");
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "[Clone]");
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+
+        const bool  canAct = emu.found();
+        const bool  hasInstance = !m_selectedInstance.empty();
+
+          
+        float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float btnW = (contentW - spacing) / 2.0f;
+        const float btnH = 45.0f;
+
+        auto StepBtn = [&](const char* label, bool enabled) -> bool {
+            if (!enabled) ImGui::BeginDisabled();
+            bool clicked = ImGui::Button(label, { btnW, btnH });
+            if (!enabled) ImGui::EndDisabled();
+            return clicked;
+        };
+        
+        if (StepBtn("Kill Emulator Processes", true)) KillProcesses();
+        ImGui::SameLine();
+        if (StepBtn("Fix Illegally Tampered", canAct)) PatchHDPlayer(emu.installDir);
+
+
+        std::string masterInst = GetMasterInstanceName(m_selectedInstance);
+
+        if (StepBtn("Disk R/W", canAct && hasInstance)) ApplyRootConfigs(emu.dataDir, masterInst);
+        ImGui::SameLine();
+        if (StepBtn("Disk R/O (Revert)", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
+
+        if (StepBtn("One Click Root", canAct && hasInstance)) OneClickRoot(emu.dataDir, m_selectedInstance);
+        ImGui::SameLine();
+        if (StepBtn("One Click Unroot", canAct && hasInstance)) OneClickUnroot(emu.dataDir, m_selectedInstance);
+        
+        ImGui::Spacing(); ImGui::Spacing(); ImGui::Spacing();
+        if (!m_statusMsg.empty()) {
+            ImColor col = m_statusIsError ? ImColor(255, 77, 77, 255) : ImColor(142, 132, 255, 255);
+            ImGui::TextColored(col, "%s %s", m_statusIsError ? "[!]" : "[OK]", m_statusMsg.c_str());
+        } else {
+            ImGui::TextDisabled("Ready to operate.");
+        }
+    }
+    ImGui::EndGroup();
 
     ImGui::End();
 }
