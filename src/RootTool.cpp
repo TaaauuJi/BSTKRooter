@@ -1112,7 +1112,7 @@ void RootTool::RenderUI() {
 
         if (StepBtn("Disk R/W", canAct && hasInstance)) ApplyRootConfigs(emu.dataDir, masterInst);
         ImGui::SameLine();
-        if (StepBtn("Disk R/O (Revert)", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
+        if (StepBtn("Disk R/O", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
 
         if (StepBtn("One Click Root", canAct && hasInstance)) OneClickRoot(emu.dataDir, m_selectedInstance);
         ImGui::SameLine();
