@@ -1,0 +1,4 @@
+lwext4 (https://github.com/gkostka/lwext4) - Embedded EXT4 driver, located at ./lwext4/
+Dear ImGui (https://github.com/ocornut/imgui) - Located at ./imgui/
+
+You can automatically download both of these dependencies using the provided setup_dependencies.bat.

@@ -7,11 +7,19 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build
 set ROOT=%~dp0
 set SRC=%ROOT%src
 set IMGUI=%ROOT%imgui
-set EXT4=%ROOT%..\ext4handle
+set LWEXT4=%ROOT%lwext4
 set BUILD=%ROOT%build
 
 :: Ensure build dir exists
 if not exist "%BUILD%" mkdir "%BUILD%"
+
+:: ─── Encrypt su_c resource ───────────────────────────────────────────────
+echo [0/3] Encrypting su resource...
+where python >nul 2>&1 && (
+    python "%ROOT%scripts\encrypt_resource.py"
+) || (
+    echo [Build] Python not found, using existing su_c.enc if available.
+)
 
 :: ─── Resource compilation ────────────────────────────────────────────────
 echo [1/3] Compiling resources...
@@ -21,11 +29,22 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: ─── Compile lwext4 library ──────────────────────────────────────────────
+if not exist "%BUILD%\lwext4" mkdir "%BUILD%\lwext4"
+if not exist "%BUILD%\lwext4.lib" (
+    echo [1.5/3] Compiling lwext4 library natively...
+    cl /nologo /W0 /O2 /MD /c /D_CRT_SECURE_NO_WARNINGS ^
+        /I"%LWEXT4%\include" ^
+        /I"%LWEXT4%\include\generated" ^
+        "%LWEXT4%\src\*.c" /Fo"%BUILD%\lwext4\\"
+    lib /nologo /out:"%BUILD%\lwext4.lib" "%BUILD%\lwext4\*.obj"
+)
+
 :: ─── Source list ─────────────────────────────────────────────────────────
 set SOURCES=^
     "%SRC%\main.cpp" ^
     "%SRC%\RootTool.cpp" ^
-    "%EXT4%\src\VHDManager.cpp" ^
+    "%SRC%\VHDManager.cpp" ^
     "%IMGUI%\imgui.cpp" ^
     "%IMGUI%\imgui_draw.cpp" ^
     "%IMGUI%\imgui_tables.cpp" ^
@@ -38,21 +57,20 @@ set INCLUDES=^
     /I"%SRC%" ^
     /I"%IMGUI%" ^
     /I"%IMGUI%\backends" ^
-    /I"%EXT4%\src" ^
-    /I"%EXT4%\external\lwext4\include" ^
-    /I"%EXT4%\external\lwext4\include\generated"
+    /I"%LWEXT4%\include" ^
+    /I"%LWEXT4%\include\generated"
 
 :: ─── Libraries ──────────────────────────────────────────────────────────
-set LIBS=d3d11.lib dxgi.lib advapi32.lib shell32.lib "%EXT4%\build\Release\lwext4.lib"
+set LIBS=d3d11.lib dxgi.lib advapi32.lib shell32.lib dwmapi.lib "%BUILD%\lwext4.lib"
 
 :: ─── Compile & Link ─────────────────────────────────────────────────────
 echo [2/3] Compiling...
-cl /nologo /W3 /O2 /MD /EHsc /std:c++17 ^
+cl /nologo /W3 /O2 /Zi /MD /EHsc /std:c++17 ^
     %INCLUDES% %SOURCES% "%BUILD%\resources.res" ^
     /Fo"%BUILD%\\" ^
     /Fe"%BUILD%\BstkRooter.exe" ^
-    /Fd"%BUILD%\vc140.pdb" ^
-    /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup %LIBS%
+    /Fd"%BUILD%\BstkRooter.pdb" ^
+    /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup /DEBUG /OPT:REF /OPT:ICF %LIBS%
 
 if %errorlevel% neq 0 (
     echo [Build] FAILED.

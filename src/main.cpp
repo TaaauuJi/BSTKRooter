@@ -2,18 +2,23 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "RootTool.h"
+#include "resources.h"
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 #include <d3d11.h>
 #include <tchar.h>
+#include <dwmapi.h>
 
-// D3D11 globals
+
 static ID3D11Device*           g_pd3dDevice           = nullptr;
 static ID3D11DeviceContext*    g_pd3dDeviceContext     = nullptr;
 static IDXGISwapChain*         g_pSwapChain            = nullptr;
 static bool                    g_SwapChainOccluded     = false;
 static UINT                    g_ResizeWidth           = 0, g_ResizeHeight = 0;
 static ID3D11RenderTargetView* g_mainRenderTargetView  = nullptr;
+HWND                           g_hWnd                  = nullptr;
 
-// Forward declarations
+
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
@@ -21,7 +26,56 @@ void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+bool LoadTextureFromResource(int resId, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
+    HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resId), RT_RCDATA);
+    if (!hRes) return false;
+    HGLOBAL hData = LoadResource(nullptr, hRes);
+    if (!hData) return false;
+    DWORD size = SizeofResource(nullptr, hRes);
+    const void* data = LockResource(hData);
+    if (!data || size == 0) return false;
+
+    int image_width = 0;
+    int image_height = 0;
+    unsigned char* image_data = stbi_load_from_memory((const stbi_uc*)data, size, &image_width, &image_height, NULL, 4);
+    if (image_data == NULL) return false;
+
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = image_width;
+    desc.Height = image_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+
+    ID3D11Texture2D *pTexture = NULL;
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = image_data;
+    subResource.SysMemPitch = desc.Width * 4;
+    subResource.SysMemSlicePitch = 0;
+    g_pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+    if (!pTexture) { stbi_image_free(image_data); return false; }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    ZeroMemory(&srvDesc, sizeof(srvDesc));
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = desc.MipLevels;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    g_pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+    pTexture->Release();
+
+    *out_width = image_width;
+    *out_height = image_height;
+    stbi_image_free(image_data);
+    return true;
+}
+
+
 
 int main(int, char**)
 {
@@ -30,14 +84,23 @@ int main(int, char**)
         ::MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY));
 
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0, 0,
-                       ::GetModuleHandle(nullptr), nullptr, nullptr,
-                       nullptr, nullptr, L"BstkRooterWnd", nullptr };
+                       ::GetModuleHandle(nullptr), ::LoadIcon(::GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_ICON1)), nullptr,
+                       nullptr, nullptr, L"BstkRooterWnd", ::LoadIcon(::GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_ICON1)) };
     ::RegisterClassExW(&wc);
 
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"BSTK Rooter",
-        WS_OVERLAPPEDWINDOW, 100, 100,
+        WS_POPUP, 100, 100,
         (int)(820 * dpi), (int)(600 * dpi),
         nullptr, nullptr, wc.hInstance, nullptr);
+    g_hWnd = hwnd;
+
+
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+    DWORD backdropType = 2;
+    DwmSetWindowAttribute(hwnd, 38, &backdropType, sizeof(backdropType));
+    MARGINS margins = { -1, -1, -1, -1 };
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
 
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
@@ -54,7 +117,7 @@ int main(int, char**)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Apply custom theme (once)
+
     ImGui::StyleColorsDark();
     RootTool::SetupTheme();
 
@@ -67,14 +130,21 @@ int main(int, char**)
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    // Load a nicer font if available
-    const float fontSize = 15.0f;
-    if (io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", fontSize * dpi) == nullptr)
+
+    const float fontSize = 16.0f;
+    if (io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", fontSize * dpi) == nullptr)
         io.Fonts->AddFontDefault();
 
-    constexpr float BG[4] = { 0.06f, 0.06f, 0.06f, 1.0f };
+    constexpr float BG[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     RootTool app;
+
+    ID3D11ShaderResourceView* logo_srv = nullptr;
+    int logo_w = 0, logo_h = 0;
+    if (LoadTextureFromResource(IDR_LOGO_PNG, &logo_srv, &logo_w, &logo_h)) {
+        app.SetLogo(logo_srv, logo_w, logo_h);
+    }
+
     bool done = false;
 
     while (!done)
@@ -123,7 +193,7 @@ int main(int, char**)
     return 0;
 }
 
-// ─── D3D11 helpers ───────────────────────────────────────────────────────────
+
 
 bool CreateDeviceD3D(HWND hWnd)
 {
@@ -173,7 +243,7 @@ void CleanupRenderTarget() {
     if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
 }
 
-// ─── Win32 message handler ───────────────────────────────────────────────────
+
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -191,6 +261,16 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         ::PostQuitMessage(0);
         return 0;
+    case WM_NCHITTEST: {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        ScreenToClient(hWnd, &pt);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+
+        if (pt.y < 40 && pt.x < (rc.right - 120))
+            return HTCAPTION;
+        break;
+    }
     }
     return ::DefWindowProcW(hWnd, msg, wParam, lParam);
 }

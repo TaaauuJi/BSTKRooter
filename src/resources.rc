@@ -1,4 +1,45 @@
+#include <winres.h>
 #include "resources.h"
 
-// Embed su_c binary as RCDATA resource
-IDR_SU_BINARY RCDATA "..\\res\\su_c"
+// Manifest
+1 24 "app.manifest"
+
+// Embed XOR-encrypted su binary as RCDATA resource (decrypted at runtime)
+IDR_SU_BINARY RCDATA "..\\res\\su_c.enc"
+IDR_LOGO_PNG  RCDATA "..\\res\\logo.png"
+IDI_ICON1     ICON   "..\\res\\logotab.ico"
+
+// Version Information
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0
+ PRODUCTVERSION 1,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Taaauu"
+            VALUE "FileDescription", "BSTK Rooter - BlueStacks 5 & MSI App Player Configuration Utility"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "BstkRooter.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Taaauu. MIT License."
+            VALUE "OriginalFilename", "BstkRooter.exe"
+            VALUE "ProductName", "BSTK Rooter"
+            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "Comments", "Emulator configuration and root access management tool for BlueStacks 5 and MSI App Player."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

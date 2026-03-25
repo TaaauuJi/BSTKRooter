@@ -1,7 +1,9 @@
-# Build output
 build/
+bin/
 
-# MSVC intermediates
+imgui/
+lwext4/
+
 *.obj
 *.pdb
 *.res
@@ -9,13 +11,23 @@ build/
 *.exp
 *.lib
 *.idb
+*.exe
+*.bak
+*.enc
+res/su_c
 
-# Logs
+.vs/
+*.sln
+*.vcxproj
+*.user
+.vscode/
+
 *.log
+build_log.txt
 
-# ImGui state
 imgui.ini
 
-# OS junk
 Thumbs.db
 desktop.ini
+.DS_Store
+
