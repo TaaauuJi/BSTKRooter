@@ -31,7 +31,7 @@ BEGIN
             VALUE "FileDescription", "BSTK Rooter - BlueStacks 5 & MSI App Player Configuration Utility"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "BstkRooter.exe"
-            VALUE "LegalCopyright", "Copyright (C) 2026 Taaauu. MIT License."
+            VALUE "LegalCopyright", "Copyright (C) 2026 Taaauu. GPLv3 License."
             VALUE "OriginalFilename", "BstkRooter.exe"
             VALUE "ProductName", "BSTK Rooter"
             VALUE "ProductVersion", "1.0.0.0"

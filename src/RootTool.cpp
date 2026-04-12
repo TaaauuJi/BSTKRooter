@@ -1,3 +1,21 @@
+/*
+ * BSTKRooter
+ * Copyright (c) 2026 Taaauu
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #include "RootTool.h"
 #include "resources.h"
 #include <imgui.h>
@@ -1112,7 +1130,7 @@ void RootTool::RenderUI() {
 
         if (StepBtn("Disk R/W", canAct && hasInstance)) ApplyRootConfigs(emu.dataDir, masterInst);
         ImGui::SameLine();
-        if (StepBtn("Disk R/O (Revert)", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
+        if (StepBtn("Disk R/O", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
 
         if (StepBtn("One Click Root", canAct && hasInstance)) OneClickRoot(emu.dataDir, m_selectedInstance);
         ImGui::SameLine();

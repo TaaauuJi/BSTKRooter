@@ -2,13 +2,13 @@
 
 **BSTK Rooter** is a one-click root tool for **BlueStacks 5** and **MSI App Player**. It gives full control over emulator configurations for game analysis, development, and reverse engineering.
 
-![License](https://img.shields.io/badge/License-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
+![License](https://img.shields.io/badge/License-GPLv3-blue.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-blue)
 
 ---
 
-> **⚠️ WARNING & DISCLAIMER ⚠️**  
+> **⚠️ WARNING & DISCLAIMER ⚠️**
 > Use this tool at your own risk. It modifies emulator files directly on your computer (system settings, filesystem images). The authors are not liable for corrupted emulator data, lost files, or system instabilities. Always run as Administrator.
 
 ---
@@ -91,4 +91,4 @@ Output: `build/BstkRooter.exe`
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE).
+GPLv3 License — see [LICENSE](LICENSE).

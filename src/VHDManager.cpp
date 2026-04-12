@@ -1,3 +1,21 @@
+/*
+ * BSTKRooter
+ * Copyright (c) 2026 Taaauu
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #include "VHDManager.h"
 #include <initguid.h>
 #include <virtdisk.h>
@@ -92,30 +110,25 @@ struct DynamicVHDInfo {
     uint32_t max_table_entries;
     uint64_t table_offset;
     uint64_t virtual_size;
-    uint32_t* bat;  // Block Allocation Table
+    uint32_t* bat;
 };
 
 static DynamicVHDInfo g_dynVHD = {};
 
-// Allocate a new block in a dynamic VHD when writing to an unallocated region
 static bool AllocateDynamicBlock(HANDLE hFile, uint32_t block_index) {
     if (block_index >= g_dynVHD.max_table_entries)
         return false;
     
-    // Get current file size — VHD footer (512 bytes) is at the very end
     LARGE_INTEGER fileSize;
     if (!GetFileSizeEx(hFile, &fileSize))
         return false;
     
-    // New block replaces the footer position; footer moves to new end
     uint64_t new_block_file_offset = fileSize.QuadPart - 512;
     uint32_t new_bat_sector = (uint32_t)(new_block_file_offset / 512);
     
     // Calculate sector bitmap size
-    // Each bit in the bitmap represents one 512-byte sector
     uint32_t sectors_per_block = g_dynVHD.block_size / 512;
     uint32_t bitmap_bytes_raw = (sectors_per_block + 7) / 8;
-    // Round up to 512-byte sector boundary
     uint32_t bitmap_padded = (bitmap_bytes_raw + 511) & ~511u;
     if (bitmap_padded == 0) bitmap_padded = 512;
     
@@ -200,7 +213,7 @@ bool VHDManager::OpenVHD(const std::string& path) {
     
     m_vhd_path = path;
     
-    // Check if it's a VHDX file, use Windows VirtDisk API natively!
+    // Check if it's a VHDX file
     if (path.length() >= 5 && (path.substr(path.length() - 5) == ".vhdx" || path.substr(path.length() - 5) == ".VHDX")) {
         VIRTUAL_STORAGE_TYPE storageType;
         storageType.DeviceId = VIRTUAL_STORAGE_TYPE_DEVICE_VHDX;
@@ -314,7 +327,7 @@ bool VHDManager::ReadVHDFooter() {
     uint8_t buffer[512];
     DWORD bytesRead;
     
-    // Try reading footer from beginning (copy header for dynamic VHD)
+    // Try reading footer from beginning
     SetFilePointer(m_hVHD, 0, NULL, FILE_BEGIN);
     if (!ReadFile(m_hVHD, buffer, 512, &bytesRead, NULL)) {
         SetError("Failed to read file");
@@ -333,11 +346,9 @@ bool VHDManager::ReadVHDFooter() {
         uint64_t current_size = _byteswap_uint64(footer->current_size);
         
         if (disk_type == 3) {
-            // Dynamic VHD - need to read BAT
             g_dynVHD.is_dynamic = true;
             g_dynVHD.virtual_size = current_size;
             
-            // Read dynamic header
             LARGE_INTEGER li;
             li.QuadPart = data_offset;
             SetFilePointerEx(m_hVHD, li, NULL, FILE_BEGIN);
@@ -352,7 +363,6 @@ bool VHDManager::ReadVHDFooter() {
                 g_dynVHD.max_table_entries = _byteswap_ulong(dynhdr->max_table_entries);
                 g_dynVHD.block_size = _byteswap_ulong(dynhdr->block_size);
                 
-                // Read BAT
                 g_dynVHD.bat = new uint32_t[g_dynVHD.max_table_entries];
                 
                 li.QuadPart = g_dynVHD.table_offset;
@@ -361,7 +371,6 @@ bool VHDManager::ReadVHDFooter() {
                 DWORD bat_size = g_dynVHD.max_table_entries * sizeof(uint32_t);
                 ReadFile(m_hVHD, g_dynVHD.bat, bat_size, &bytesRead, NULL);
                 
-                // Byte swap BAT entries
                 for (uint32_t i = 0; i < g_dynVHD.max_table_entries; i++) {
                     g_dynVHD.bat[i] = _byteswap_ulong(g_dynVHD.bat[i]);
                 }
@@ -370,7 +379,6 @@ bool VHDManager::ReadVHDFooter() {
     }
     
     if (!found_footer) {
-        // Try at end of file
         LARGE_INTEGER fileSize;
         GetFileSizeEx(m_hVHD, &fileSize);
         
@@ -388,7 +396,6 @@ bool VHDManager::ReadVHDFooter() {
     if (!found_footer) {
         // Not a VHD? Try as raw image
         SetError("No VHD footer found - treating as raw image");
-        // Continue anyway - might be a raw disk image
     }
     
     return true;
@@ -416,13 +423,10 @@ bool VHDManager::ParsePartitions() {
     DWORD bytesRead;
     
     if (g_dynVHD.is_dynamic) {
-        // Read virtual sector 0 through BAT
-        // Sector 0 is in block 0
         uint32_t block_index = 0;
         uint32_t bat_entry = g_dynVHD.bat[block_index];
         
         if (bat_entry == 0xFFFFFFFF) {
-            // Block not allocated - try raw ext4
             SetError("Block 0 not allocated in dynamic VHD");
             
             // Still add as raw ext4 partition covering entire virtual disk
@@ -435,12 +439,8 @@ bool VHDManager::ParsePartitions() {
             return true;
         }
         
-        // Read from physical offset
-        // Each BAT entry points to a sector offset (in 512-byte sectors)
-        // Add 1 sector for the bitmap
         uint64_t phys_offset = ((uint64_t)bat_entry) * 512;
         
-        // Skip bitmap (bitmap size = block_size / (512 * 8) rounded up to sector)
         uint32_t bitmap_sectors = (g_dynVHD.block_size / 512 + 7) / 8;
         bitmap_sectors = (bitmap_sectors + 511) / 512;
         if (bitmap_sectors == 0) bitmap_sectors = 1;
@@ -453,13 +453,10 @@ bool VHDManager::ParsePartitions() {
         ReadFile(m_hVHD, sector0, 512, &bytesRead, NULL);
         
     } else {
-        // Fixed VHD or raw - check if "conectix" header takes first 512 bytes
         SetFilePointer(m_hVHD, 0, NULL, FILE_BEGIN);
         ReadFile(m_hVHD, sector0, 512, &bytesRead, NULL);
         
-        // If first 512 bytes is VHD header, skip it
         if (memcmp(sector0, "conectix", 8) == 0) {
-            // Fixed VHD: disk data starts at offset 512
             SetFilePointer(m_hVHD, 512, NULL, FILE_BEGIN);
             ReadFile(m_hVHD, sector0, 512, &bytesRead, NULL);
         }
@@ -489,14 +486,13 @@ bool VHDManager::ParsePartitions() {
     // Check for GPT
     uint8_t sector1[512];
     if (g_dynVHD.is_dynamic) {
-        // Read virtual sector 1 - still in block 0 for most block sizes
         uint32_t bat_entry = g_dynVHD.bat[0];
         if (bat_entry != 0xFFFFFFFF) {
             uint64_t phys_offset = ((uint64_t)bat_entry) * 512;
             uint32_t bitmap_sectors = (g_dynVHD.block_size / 512 + 7) / 8;
             bitmap_sectors = (bitmap_sectors + 511) / 512;
             if (bitmap_sectors == 0) bitmap_sectors = 1;
-            phys_offset += bitmap_sectors * 512 + 512; // +512 for sector 1
+            phys_offset += bitmap_sectors * 512 + 512;
             
             LARGE_INTEGER li;
             li.QuadPart = phys_offset;
@@ -504,7 +500,6 @@ bool VHDManager::ParsePartitions() {
             ReadFile(m_hVHD, sector1, 512, &bytesRead, NULL);
         }
     } else {
-        // Try sector 1 for GPT
         LARGE_INTEGER li;
         li.QuadPart = 512;
         SetFilePointerEx(m_hVHD, li, NULL, FILE_BEGIN);
@@ -512,8 +507,6 @@ bool VHDManager::ParsePartitions() {
     }
     
     if (memcmp(sector1, "EFI PART", 8) == 0) {
-        // GPT found - parse GPT entries
-        // For now, assume first partition starts at LBA 2048
         PartitionInfo info;
         info.type = 0x83;
         info.offset = 2048 * 512;
@@ -542,7 +535,6 @@ bool VHDManager::ParsePartitions() {
             ReadFile(m_hVHD, &ext4_magic, 2, &bytesRead, NULL);
         }
     } else {
-        // Try raw ext4 at various offsets
         uint64_t try_offsets[] = { 1024, 512 + 1024, 0 };
         
         for (int i = 0; try_offsets[i] != 0; i++) {
@@ -557,7 +549,7 @@ bool VHDManager::ParsePartitions() {
                 info.offset = (try_offsets[i] == 1024) ? 0 : 512;
                 
                 info.size = GetDiskSize(m_hVHD) - info.offset;
-                if (!m_isVirtDiskAttached) info.size -= 512; // minus VHD footer
+                if (!m_isVirtDiskAttached) info.size -= 512;
                 info.is_ext4 = true;
                 m_partitions.push_back(info);
                 return true;
@@ -616,7 +608,6 @@ int VHDManager::BlockRead(struct ext4_blockdev* bdev, void* buf,
         uint64_t phys_offset;
         
         if (g_dynVHD.is_dynamic) {
-            // Translate virtual offset to physical offset
             uint32_t block_index = (uint32_t)(virtual_offset / g_dynVHD.block_size);
             uint32_t offset_in_block = (uint32_t)(virtual_offset % g_dynVHD.block_size);
             
@@ -627,12 +618,10 @@ int VHDManager::BlockRead(struct ext4_blockdev* bdev, void* buf,
             uint32_t bat_entry = g_dynVHD.bat[block_index];
             
             if (bat_entry == 0xFFFFFFFF) {
-                // Block not allocated - return zeros
                 memset(outbuf + (i * sector_size), 0, sector_size);
                 continue;
             }
             
-            // Physical offset = BAT entry (in sectors) * 512 + bitmap + offset in block
             uint32_t bitmap_sectors = (g_dynVHD.block_size / 512 + 7) / 8;
             bitmap_sectors = (bitmap_sectors + 511) / 512;
             if (bitmap_sectors == 0) bitmap_sectors = 1;
@@ -1037,10 +1026,27 @@ bool VHDManager::MakeDirectory(const std::string& path) {
         SetError("ext4 not mounted");
         return false;
     }
-    
+
+    std::string current;
+    for (size_t i = 0; i < path.size(); i++) {
+        char c = path[i];
+        if (c == '/' && i > 0) {
+            int rc = ext4_dir_mk(current.c_str());
+            if (rc != EOK && rc != EEXIST) {
+                char errBuf[256];
+                snprintf(errBuf, sizeof(errBuf), "Failed to create dir '%s' (rc=%d)", current.c_str(), rc);
+                SetError(errBuf);
+                return false;
+            }
+        }
+        current += c;
+    }
+    // Create the final component
     int rc = ext4_dir_mk(path.c_str());
-    if (rc != EOK) {
-        SetError(MakeError("Failed to create directory: ", path.c_str()));
+    if (rc != EOK && rc != EEXIST) {
+        char errBuf[256];
+        snprintf(errBuf, sizeof(errBuf), "Failed to create dir '%s' (rc=%d)", path.c_str(), rc);
+        SetError(errBuf);
         return false;
     }
     return true;
