@@ -19,6 +19,10 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <mutex>
+#include <atomic>
+
+class VHDManager;
 
 
 
@@ -39,6 +43,7 @@ struct EmulatorInfo {
 class RootTool {
 public:
     RootTool();
+    ~RootTool();
 
 
     static void SetupTheme();
@@ -63,12 +68,21 @@ private:
     void OneClickRoot(const std::string& dataDir, const std::string& instanceName);
     void OneClickUnroot(const std::string& dataDir, const std::string& instanceName);
 
+    // Kitsune Magisk methods
+    void InstallKitsuneMagisk(const std::string& dataDir, const std::string& selectedInstance);
+    void UninstallKitsuneMagisk(const std::string& dataDir, const std::string& selectedInstance);
+
+    // Helpers
+    std::string ExtractResourceToTemp(int resourceId, const char* tmpName);
+    std::string FindDataVhdx(const std::string& instanceDir);
+
 
     std::string ReadRegistryString(const std::string& subKey, const std::string& valueName);
     std::string ReadFileString(const std::string& path);
     bool        WriteFileString(const std::string& path, const std::string& content);
     void        Log(const std::string& msg, bool isError = false);
     void        SetStatus(const std::string& msg, bool isError);
+    void        ShowSystemNotification(const std::string& title, const std::string& message);
     bool        IsMasterInstance(const std::string& instanceName);
     std::string GetMasterInstanceName(const std::string& instanceName);
 
@@ -80,6 +94,8 @@ private:
     std::string  m_selectedInstance;
     std::string  m_statusMsg;
     bool         m_statusIsError = false;
+    std::mutex   m_statusMutex;
+    std::atomic<bool> m_isBusy{false};
 
     void* m_logoTexture = nullptr;
     int   m_logoWidth   = 0;

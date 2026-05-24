@@ -20,6 +20,7 @@
 #include "resources.h"
 #include <imgui.h>
 #include <windows.h>
+#include <shellapi.h>
 #include <TlHelp32.h>
 #include <filesystem>
 #include <fstream>
@@ -28,12 +29,14 @@
 #include <cstdio>
 #include <algorithm>
 #include <cstring>
+#include <thread>
+#include <mutex>
 
 #include "VHDManager.h"
 
 namespace fs = std::filesystem;
 
-
+extern HWND g_hWnd;
 
 static void KillProcessByName(const char* name) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -51,14 +54,262 @@ static void KillProcessByName(const char* name) {
 
 
 
-RootTool::RootTool() { RefreshEmulatorInfo(); }
+RootTool::RootTool() {
+    RefreshEmulatorInfo();
 
-void RootTool::Log(const std::string& /*msg*/, bool /*isError*/) {
+    // Set up a persistent tray icon so Windows registers the app identity properly
+    NOTIFYICONDATAA nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_TIP;
+    nid.hIcon = ::LoadIcon(::GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_ICON1));
+    if (!nid.hIcon) {
+        nid.hIcon = ::LoadIcon(nullptr, IDI_APPLICATION);
+    }
+    strcpy_s(nid.szTip, sizeof(nid.szTip), "BSTK Rooter");
+    
+    ::Shell_NotifyIconA(NIM_ADD, &nid);
+}
+
+RootTool::~RootTool() {
+    NOTIFYICONDATAA nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_hWnd;
+    nid.uID = 1;
+    ::Shell_NotifyIconA(NIM_DELETE, &nid);
+}
+
+void RootTool::Log(const std::string& msg, bool isError) {
+    std::ofstream logFile("bstk_kitsune.log", std::ios::app);
+    if (logFile) {
+        time_t t = time(nullptr);
+        char buf[26]; ctime_s(buf, sizeof(buf), &t);
+        std::string timeStr(buf); if (!timeStr.empty() && timeStr.back() == '\n') timeStr.pop_back();
+        logFile << "[" << timeStr << "] " << (isError ? "[ERROR] " : "[INFO] ") << msg << std::endl;
+    }
 }
 
 void RootTool::SetStatus(const std::string& msg, bool isError) {
+    std::lock_guard<std::mutex> lock(m_statusMutex);
     m_statusMsg     = msg;
     m_statusIsError = isError;
+}
+
+void RootTool::ShowSystemNotification(const std::string& title, const std::string& message) {
+    NOTIFYICONDATAA nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    strcpy_s(nid.szInfoTitle, sizeof(nid.szInfoTitle), title.c_str());
+    strcpy_s(nid.szInfo, sizeof(nid.szInfo), message.c_str());
+    
+    // Modify the existing persistent tray icon to trigger the balloon tip
+    ::Shell_NotifyIconA(NIM_MODIFY, &nid);
+}
+
+// =====================================================================
+// RESOURCE HELPERS
+// =====================================================================
+
+std::string RootTool::ExtractResourceToTemp(int resourceId, const char* tmpName) {
+    HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
+    if (!hRes) return {};
+    HGLOBAL hData = LoadResource(nullptr, hRes);
+    if (!hData) return {};
+    DWORD sz = SizeofResource(nullptr, hRes);
+    const void* data = LockResource(hData);
+    if (!data || sz == 0) return {};
+
+    char tempDir[MAX_PATH]{}; ::GetTempPathA(MAX_PATH, tempDir);
+    std::string tmpPath = std::string(tempDir) + tmpName;
+    std::ofstream f(tmpPath, std::ios::binary);
+    if (!f) return {};
+    f.write(reinterpret_cast<const char*>(data), sz);
+    f.close();
+    return tmpPath;
+}
+
+std::string RootTool::FindDataVhdx(const std::string& instanceDir) {
+    std::string dataPath = instanceDir + "Data.vhdx";
+    if (fs::exists(dataPath)) return dataPath;
+
+    std::error_code ec;
+    std::string anyVhdx;
+    for (const auto& entry : fs::directory_iterator(instanceDir, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        std::string ext = entry.path().extension().string();
+        std::string name = entry.path().stem().string();
+        for (auto& ch : ext) ch = (char)tolower((unsigned char)ch);
+        for (auto& ch : name) ch = (char)tolower((unsigned char)ch);
+        if (ext == ".vhdx") {
+            if (name.find("data") != std::string::npos) return entry.path().string();
+            if (anyVhdx.empty()) anyVhdx = entry.path().string();
+        }
+    }
+    return anyVhdx;
+}
+
+
+void RootTool::InstallKitsuneMagisk(const std::string& dataDir, const std::string& selectedInstance) {
+    if (dataDir.empty() || selectedInstance.empty()) return;
+    std::string masterInst = GetMasterInstanceName(selectedInstance);
+    KillProcesses(); ::Sleep(1000);
+
+    std::string engineDir = dataDir;
+    if (!engineDir.empty() && engineDir.back() != '\\' && engineDir.back() != '/') engineDir += '\\';
+    std::string instanceDir = engineDir + masterInst + "\\";
+    std::string vhdPath = instanceDir + "Root.vhd";
+    if (!fs::exists(vhdPath)) { SetStatus("Root.vhd not found.", true); return; }
+
+    auto copyRes = [&](VHDManager& v, int resId, const char* tmp, const std::string& dst) -> bool {
+        std::string p = ExtractResourceToTemp(resId, tmp);
+        if (p.empty()) return false;
+        bool ok = v.CopyFileFromHost(p, dst);
+        fs::remove(p);
+        if (ok) { v.SetFilePermissions(dst, 0755); v.SetFileOwner(dst, 0, 0); }
+        return ok;
+    };
+
+    SetStatus("Phase 1: Copying to Root.vhd...", false);
+    {
+        VHDManager v;
+        if (!v.OpenVHD(vhdPath)) { SetStatus("Failed to open Root.vhd.", true); return; }
+        const auto& pa = v.GetPartitions(); int ei = -1;
+        for (size_t i = 0; i < pa.size(); i++) if (pa[i].is_ext4 && ei < 0) ei = (int)i;
+        if (ei < 0 || !v.MountExt4Partition(ei)) { v.CloseVHD(); SetStatus("No ext4 in Root.vhd.", true); return; }
+        v.MakeDirectory("/android/system/etc/init");
+        v.MakeDirectory("/android/system/etc/init/magisk");
+        struct R { int id; const char* t; const char* d; };
+        R f[] = {
+            {IDR_MAGISK_RC,"bstk_rc.tmp","/android/system/etc/init/magisk.rc"},
+            {IDR_MAGISK32,"bstk_m32.tmp","/android/system/etc/init/magisk/magisk32"},
+            {IDR_MAGISK64,"bstk_m64.tmp","/android/system/etc/init/magisk/magisk64"},
+            {IDR_MAGISKINIT,"bstk_mi.tmp","/android/system/etc/init/magisk/magiskinit"},
+            {IDR_MAGISKPOLICY,"bstk_mp.tmp","/android/system/etc/init/magisk/magiskpolicy"},
+            {IDR_STUB_APK,"bstk_sa.tmp","/android/system/etc/init/magisk/stub.apk"},
+            {IDR_MAGISK_CONFIG,"bstk_mc.tmp","/android/system/etc/init/magisk/config"},
+        };
+        for (auto& e : f) copyRes(v, e.id, e.t, e.d);
+        v.UnmountExt4(); v.CloseVHD();
+    }
+
+    SetStatus("Phase 2: Copying to Data disk...", false);
+    {
+        std::string dd = FindDataVhdx(instanceDir);
+        if (!dd.empty()) {
+            VHDManager v;
+            if (v.OpenVHD(dd)) {
+                const auto& pa = v.GetPartitions(); int ei = -1;
+                for (size_t i = 0; i < pa.size(); i++) if (pa[i].is_ext4 && ei < 0) ei = (int)i;
+                if (ei >= 0 && v.MountExt4Partition(ei)) {
+                    v.MakeDirectory("/adb"); v.MakeDirectory("/adb/magisk"); v.MakeDirectory("/adb/magisk/chromeos");
+                    struct R { int id; const char* t; const char* d; };
+                    R f[] = {
+                        {IDR_MAGISK32,"bstk_d32.tmp","/adb/magisk/magisk32"},
+                        {IDR_MAGISK64,"bstk_d64.tmp","/adb/magisk/magisk64"},
+                        {IDR_MAGISKINIT,"bstk_di.tmp","/adb/magisk/magiskinit"},
+                        {IDR_MAGISKPOLICY,"bstk_dp.tmp","/adb/magisk/magiskpolicy"},
+                        {IDR_BUSYBOX,"bstk_bb.tmp","/adb/magisk/busybox"},
+                        {IDR_MAGISKBOOT,"bstk_mb.tmp","/adb/magisk/magiskboot"},
+                        {IDR_STUB_APK,"bstk_ds.tmp","/adb/magisk/stub.apk"},
+                        {IDR_UTIL_FUNCTIONS,"bstk_uf.tmp","/adb/magisk/util_functions.sh"},
+                        {IDR_BOOT_PATCH,"bstk_bp.tmp","/adb/magisk/boot_patch.sh"},
+                        {IDR_ADDON_D,"bstk_ad.tmp","/adb/magisk/addon.d.sh"},
+                        {IDR_CHROMEOS_FUTILITY,"bstk_cf.tmp","/adb/magisk/chromeos/futility"},
+                        {IDR_CHROMEOS_KEYBLOCK,"bstk_ck.tmp","/adb/magisk/chromeos/kernel.keyblock"},
+                        {IDR_CHROMEOS_VBPRIVK,"bstk_cv.tmp","/adb/magisk/chromeos/kernel_data_key.vbprivk"},
+                        {IDR_MAGISK_DB,"bstk_db.tmp","/adb/magisk.db"},
+                    };
+                    for (auto& e : f) copyRes(v, e.id, e.t, e.d);
+                    v.UnmountExt4();
+                }
+                v.CloseVHD();
+            }
+        }
+    }
+
+    SetStatus("Opening emulator...", false);
+    {
+        EmulatorInfo& emu = (m_selectedEmulator == 0) ? m_bluestacks : m_msi;
+        std::string hp = emu.installDir;
+        if (!hp.empty() && hp.back() != '\\') hp += '\\';
+        hp += "HD-Player.exe";
+        std::string sc = "\"" + hp + "\" --instance " + masterInst;
+        STARTUPINFOA si={sizeof(si)}; PROCESS_INFORMATION pi{};
+        CreateProcessA(NULL,(LPSTR)sc.c_str(),NULL,NULL,FALSE,0,NULL,NULL,&si,&pi);
+        if (pi.hProcess) CloseHandle(pi.hProcess); if (pi.hThread) CloseHandle(pi.hThread);
+        ::Sleep(3000);
+
+        ShowSystemNotification("Install Kitsune Magisk", 
+            "Kitsune Magisk files have been successfully copied offline!\n\n"
+            "Please install the Magisk manager APK manually now from within the emulator.");
+
+        SetStatus("Kitsune Magisk files copied. Please install Magisk APK manually.", false);
+    }
+}
+
+void RootTool::UninstallKitsuneMagisk(const std::string& dataDir, const std::string& selectedInstance) {
+    if (dataDir.empty() || selectedInstance.empty()) return;
+    std::string masterInst = GetMasterInstanceName(selectedInstance);
+
+    KillProcesses(); ::Sleep(1000);
+    std::string ed = dataDir;
+    if (!ed.empty() && ed.back() != '\\' && ed.back() != '/') ed += '\\';
+    std::string instanceDir = ed + masterInst + "\\";
+
+    SetStatus("Cleaning Root.vhd...", false);
+    {
+        VHDManager v;
+        if (v.OpenVHD(instanceDir + "Root.vhd")) {
+            const auto& pa = v.GetPartitions(); int ei = -1;
+            for (size_t i = 0; i < pa.size(); i++) if (pa[i].is_ext4 && ei < 0) ei = (int)i;
+            if (ei >= 0 && v.MountExt4Partition(ei)) {
+                v.DeleteRecursive("/android/system/etc/init/magisk");
+                if (v.FileExists("/android/system/etc/init/magisk.rc")) v.DeleteFile("/android/system/etc/init/magisk.rc");
+                v.UnmountExt4();
+            }
+            v.CloseVHD();
+        }
+    }
+
+    SetStatus("Cleaning Data disk...", false);
+    {
+        std::string dd = FindDataVhdx(instanceDir);
+        if (!dd.empty()) {
+            VHDManager v;
+            if (v.OpenVHD(dd)) {
+                const auto& pa = v.GetPartitions(); int ei = -1;
+                for (size_t i = 0; i < pa.size(); i++) if (pa[i].is_ext4 && ei < 0) ei = (int)i;
+                if (ei >= 0 && v.MountExt4Partition(ei)) {
+                    v.DeleteRecursive("/adb");
+                    v.UnmountExt4();
+                }
+                v.CloseVHD();
+            }
+        }
+    }
+
+    SetStatus("Opening emulator...", false);
+    {
+        EmulatorInfo& emu = (m_selectedEmulator == 0) ? m_bluestacks : m_msi;
+        std::string hp = emu.installDir;
+        if (!hp.empty() && hp.back() != '\\') hp += '\\';
+        hp += "HD-Player.exe";
+        std::string sc = "\"" + hp + "\" --instance " + masterInst;
+        STARTUPINFOA si={sizeof(si)}; PROCESS_INFORMATION pi{};
+        CreateProcessA(NULL,(LPSTR)sc.c_str(),NULL,NULL,FALSE,0,NULL,NULL,&si,&pi);
+        if (pi.hProcess) CloseHandle(pi.hProcess); if (pi.hThread) CloseHandle(pi.hThread);
+        ::Sleep(3000);
+
+        ShowSystemNotification("Uninstall Kitsune Magisk", 
+            "Kitsune Magisk files have been successfully cleaned from the disks offline!\n\n"
+            "Please uninstall the Magisk manager APK manually now from within the emulator.");
+
+        SetStatus("Kitsune Magisk uninstalled. Please uninstall Magisk APK manually.", false);
+    }
 }
 
 std::string RootTool::ReadRegistryString(const std::string& subKey, const std::string& valueName) {
@@ -481,8 +732,10 @@ done_search:
     std::ofstream out(exePath, std::ios::binary);
     if (!out || !out.write(reinterpret_cast<const char*>(buf.data()), (std::streamsize)buf.size()))
         SetStatus("Failed to patch — run as Administrator.", true);
-    else
+    else {
         SetStatus("Patched successfully!", false);
+        ShowSystemNotification("HD-Player Patch", "Patched successfully!");
+    }
 }
 
 void RootTool::ApplyRootConfigs(const std::string& dataDir, const std::string& instanceName) {
@@ -530,6 +783,7 @@ void RootTool::ApplyRootConfigs(const std::string& dataDir, const std::string& i
     }
 
     SetStatus("Disk set to R/W.", false);
+    ShowSystemNotification("Disk Configuration", "Disk set to R/W successfully.");
 }
 
 void RootTool::RevertDiskToReadonly(const std::string& dataDir, const std::string& instanceName) {
@@ -576,6 +830,7 @@ void RootTool::RevertDiskToReadonly(const std::string& dataDir, const std::strin
     }
 
     SetStatus("Disk reverted to Readonly.", false);
+    ShowSystemNotification("Disk Configuration", "Disk reverted to Readonly successfully.");
 }
 
 
@@ -623,14 +878,6 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& selec
         return;
     }
 
-
-    constexpr uint8_t kXorKey = 0xA7;
-    std::vector<uint8_t> suDecrypted(suSize);
-    const uint8_t* src = reinterpret_cast<const uint8_t*>(suData);
-    for (DWORD i = 0; i < suSize; i++)
-        suDecrypted[i] = src[i] ^ kXorKey;
-
-
     char tempDir[MAX_PATH]{};
     ::GetTempPathA(MAX_PATH, tempDir);
     std::string resSuC = std::string(tempDir) + "bstk_su_c.tmp";
@@ -640,9 +887,9 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& selec
             SetStatus("Failed to create temp file.", true);
             return;
         }
-        tmp.write(reinterpret_cast<const char*>(suDecrypted.data()), suSize);
+        tmp.write(reinterpret_cast<const char*>(suData), suSize);
     }
-    Log("[*] Decrypted embedded su (" + std::to_string(suSize) + " bytes) to temp.");
+    Log("[*] Extracted embedded su (" + std::to_string(suSize) + " bytes) to temp.");
 
 
     VHDManager vhd;
@@ -761,6 +1008,7 @@ void RootTool::OneClickRoot(const std::string& dataDir, const std::string& selec
     }
 
     SetStatus("Rooted successfully!", false);
+    ShowSystemNotification("One Click Root", "Rooted successfully!");
 }
 
 
@@ -841,6 +1089,7 @@ void RootTool::OneClickUnroot(const std::string& dataDir, const std::string& sel
     vhd.CloseVHD();
 
     SetStatus("Unrooted successfully!", false);
+    ShowSystemNotification("One Click Unroot", "Unrooted successfully!");
 }
 
 
@@ -938,7 +1187,6 @@ void RootTool::RenderUI() {
 
 
     {
-        extern HWND g_hWnd;
         float titleH = 36.0f;
         float btnSize = 28.0f;
         float btnY = pos.y + (titleH - btnSize) / 2.0f;
@@ -1115,31 +1363,63 @@ void RootTool::RenderUI() {
         const float btnH = 45.0f;
 
         auto StepBtn = [&](const char* label, bool enabled) -> bool {
-            if (!enabled) ImGui::BeginDisabled();
+            if (!enabled || m_isBusy) ImGui::BeginDisabled();
             bool clicked = ImGui::Button(label, { btnW, btnH });
-            if (!enabled) ImGui::EndDisabled();
+            if (!enabled || m_isBusy) ImGui::EndDisabled();
             return clicked;
         };
         
         if (StepBtn("Kill Emulator Processes", true)) KillProcesses();
         ImGui::SameLine();
-        if (StepBtn("Fix Illegally Tampered", canAct)) PatchHDPlayer(emu.installDir);
+        if (StepBtn("Fix Illegally Tampered", canAct)) {
+            std::string iDir = emu.installDir;
+            m_isBusy = true; std::thread([this, iDir]() { PatchHDPlayer(iDir); m_isBusy = false; }).detach();
+        }
 
 
         std::string masterInst = GetMasterInstanceName(m_selectedInstance);
 
-        if (StepBtn("Disk R/W", canAct && hasInstance)) ApplyRootConfigs(emu.dataDir, masterInst);
+        if (StepBtn("Disk R/W", canAct && hasInstance)) {
+            std::string dDir = emu.dataDir; std::string mi = masterInst;
+            m_isBusy = true; std::thread([this, dDir, mi]() { ApplyRootConfigs(dDir, mi); m_isBusy = false; }).detach();
+        }
         ImGui::SameLine();
-        if (StepBtn("Disk R/O", canAct && hasInstance)) RevertDiskToReadonly(emu.dataDir, masterInst);
+        if (StepBtn("Disk R/O", canAct && hasInstance)) {
+            std::string dDir = emu.dataDir; std::string mi = masterInst;
+            m_isBusy = true; std::thread([this, dDir, mi]() { RevertDiskToReadonly(dDir, mi); m_isBusy = false; }).detach();
+        }
 
-        if (StepBtn("One Click Root", canAct && hasInstance)) OneClickRoot(emu.dataDir, m_selectedInstance);
+        if (StepBtn("One Click Root", canAct && hasInstance)) {
+            std::string dDir = emu.dataDir; std::string si = m_selectedInstance;
+            m_isBusy = true; std::thread([this, dDir, si]() { OneClickRoot(dDir, si); m_isBusy = false; }).detach();
+        }
         ImGui::SameLine();
-        if (StepBtn("One Click Unroot", canAct && hasInstance)) OneClickUnroot(emu.dataDir, m_selectedInstance);
+        if (StepBtn("One Click Unroot", canAct && hasInstance)) {
+            std::string dDir = emu.dataDir; std::string si = m_selectedInstance;
+            m_isBusy = true; std::thread([this, dDir, si]() { OneClickUnroot(dDir, si); m_isBusy = false; }).detach();
+        }
         
-        ImGui::Spacing(); ImGui::Spacing(); ImGui::Spacing();
-        if (!m_statusMsg.empty()) {
-            ImColor col = m_statusIsError ? ImColor(255, 77, 77, 255) : ImColor(142, 132, 255, 255);
-            ImGui::TextColored(col, "%s %s", m_statusIsError ? "[!]" : "[OK]", m_statusMsg.c_str());
+        if (StepBtn("Install Kitsune Magisk", canAct && hasInstance)) {
+            std::string d = emu.dataDir; std::string s = m_selectedInstance;
+            m_isBusy = true; std::thread([this, d, s]() { InstallKitsuneMagisk(d, s); m_isBusy = false; }).detach();
+        }
+        ImGui::SameLine();
+        if (StepBtn("Uninstall Kitsune Magisk", canAct && hasInstance)) {
+            std::string d = emu.dataDir; std::string s = m_selectedInstance;
+            m_isBusy = true; std::thread([this, d, s]() { UninstallKitsuneMagisk(d, s); m_isBusy = false; }).detach();
+        }
+        
+        ImGui::Spacing();
+        std::string currentStatusMsg;
+        bool currentStatusIsError;
+        {
+            std::lock_guard<std::mutex> lock(m_statusMutex);
+            currentStatusMsg = m_statusMsg;
+            currentStatusIsError = m_statusIsError;
+        }
+        if (!currentStatusMsg.empty()) {
+            ImColor col = currentStatusIsError ? ImColor(255, 77, 77, 255) : ImColor(142, 132, 255, 255);
+            ImGui::TextColored(col, "%s %s", currentStatusIsError ? "[!]" : "[OK]", currentStatusMsg.c_str());
         } else {
             ImGui::TextDisabled("Ready to operate.");
         }

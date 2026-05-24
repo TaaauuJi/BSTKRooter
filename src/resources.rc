@@ -4,10 +4,34 @@
 // Manifest
 1 24 "app.manifest"
 
-// Embed XOR-encrypted su binary as RCDATA resource (decrypted at runtime)
-IDR_SU_BINARY RCDATA "..\\res\\su_c.enc"
+// Embed su binary as RCDATA resource
+IDR_SU_BINARY RCDATA "..\\res\\su_c"
 IDR_LOGO_PNG  RCDATA "..\\res\\logo.png"
 IDI_ICON1     ICON   "..\\res\\logotab.ico"
+
+// Kitsune Magisk
+IDR_MAGISK_RC      RCDATA "..\\res\\init\\magisk.rc"
+IDR_MAGISK_CONFIG  RCDATA "..\\res\\init\\magisk\\config"
+
+// Kitsune Magisk binaries (shared between init/ and data/ targets)
+IDR_MAGISK32       RCDATA "..\\res\\init\\magisk\\magisk32"
+IDR_MAGISK64       RCDATA "..\\res\\init\\magisk\\magisk64"
+IDR_MAGISKINIT     RCDATA "..\\res\\init\\magisk\\magiskinit"
+IDR_MAGISKPOLICY   RCDATA "..\\res\\init\\magisk\\magiskpolicy"
+IDR_STUB_APK       RCDATA "..\\res\\init\\magisk\\stub.apk"
+
+// Kitsune Magisk data-only binaries (for /adb/magisk/)
+IDR_BUSYBOX        RCDATA "..\\res\\magisk\\busybox"
+IDR_MAGISKBOOT     RCDATA "..\\res\\magisk\\magiskboot"
+IDR_UTIL_FUNCTIONS RCDATA "..\\res\\magisk\\util_functions.sh"
+IDR_BOOT_PATCH     RCDATA "..\\res\\magisk\\boot_patch.sh"
+IDR_ADDON_D        RCDATA "..\\res\\magisk\\addon.d.sh"
+IDR_MAGISK_DB      RCDATA "..\\res\\magisk.db"
+
+// Chromeos files (for /adb/magisk/chromeos/)
+IDR_CHROMEOS_FUTILITY  RCDATA "..\\res\\magisk\\chromeos\\futility"
+IDR_CHROMEOS_KEYBLOCK  RCDATA "..\\res\\magisk\\chromeos\\kernel.keyblock"
+IDR_CHROMEOS_VBPRIVK   RCDATA "..\\res\\magisk\\chromeos\\kernel_data_key.vbprivk"
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
