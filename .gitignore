@@ -1,6 +1,7 @@
 build/
 bin/
 VHDExplorer/
+scripts/
 res/magisk.apk
 
 imgui/
