@@ -40,6 +40,8 @@ struct EmulatorInfo {
     bool        found() const { return !installDir.empty(); }
 };
 
+struct ImFont;
+
 class RootTool {
 public:
     RootTool();
@@ -53,6 +55,10 @@ public:
         m_logoTexture = srv;
         m_logoWidth = w;
         m_logoHeight = h;
+    }
+
+    void SetBrandingFont(ImFont* font) {
+        m_brandingFont = font;
     }
 
 private:
@@ -73,6 +79,7 @@ private:
     void UninstallKitsuneMagisk(const std::string& dataDir, const std::string& selectedInstance);
 
     // Helpers
+    void        LaunchEmulator(const std::string& exePath, const std::string& args);
     std::string ExtractResourceToTemp(int resourceId, const char* tmpName);
     std::string FindDataVhdx(const std::string& instanceDir);
 
@@ -101,4 +108,5 @@ private:
     int   m_logoWidth   = 0;
     int   m_logoHeight  = 0;
     bool  m_showInstanceList = false;
+    ImFont* m_brandingFont = nullptr;
 };

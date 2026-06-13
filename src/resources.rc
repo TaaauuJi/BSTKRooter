@@ -35,8 +35,8 @@ IDR_CHROMEOS_VBPRIVK   RCDATA "..\\res\\magisk\\chromeos\\kernel_data_key.vbpriv
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0
- PRODUCTVERSION 1,0,0
+ FILEVERSION 2,0,0
+ PRODUCTVERSION 2,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -52,13 +52,13 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "Taaauu"
-            VALUE "FileDescription", "BSTK Rooter - BlueStacks 5 & MSI App Player Configuration Utility"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileDescription", "BlueStacks 5 & MSI App Player Utility"
+            VALUE "FileVersion", "2.0.0.0"
             VALUE "InternalName", "BstkRooter.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 Taaauu. GPLv3 License."
             VALUE "OriginalFilename", "BstkRooter.exe"
             VALUE "ProductName", "BSTK Rooter"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "2.0.0.0"
             VALUE "Comments", "Emulator configuration and root access management tool for BlueStacks 5 and MSI App Player."
         END
     END

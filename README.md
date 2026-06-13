@@ -8,7 +8,7 @@
 
 ---
 
-> ⚠️ WARNING & DISCLAIMER ⚠️ 
+> ⚠️ WARNING & DISCLAIMER ⚠️
 >
 > **Use this tool at your own risk.** It modifies emulator configuration files and system files directly on your computer. The authors are not liable for corrupted emulator data, lost files, or system instabilities.
 
@@ -59,11 +59,13 @@ BSTKRooter/
 ## 📦 Getting Started
 
 ### Prerequisites
+
 - **Windows 10 / 11**
 - **Visual Studio 2022** (with Desktop development with C++ workload)
 - **C++17**
 
 ### Building from Source
+
 1. Run `setup_dependencies.bat` to download `ImGui` and `lwext4`.
 2. Open the **x64 Native Tools Command Prompt for VS 2022**.
 3. Run the build script:
@@ -81,14 +83,17 @@ BSTKRooter/
 3. Choose the target instance from the dropdown.
 
 ### Traditional Root
+
 1. Click **"One Click Root"**.
 2. Click **"Fix Illegally Tampered"**. (*Note: If "Illegally Tampered" error appears, click "Fix Illegally Tampered" button*)
 3. Start your emulator to boot with root privileges.
 
 ### Unroot
+
 1. Click **"One Click Unroot"**.
 
 ### Kitsune Magisk
+
 - **Install:**
   1. Click **"Install Kitsune Magisk"**.
   2. The tool copies files offline to virtual disks and opens the emulator.
@@ -107,7 +112,7 @@ BSTK Rooter is made possible by and gives full credit to the following excellent
 - **[Dear ImGui](https://github.com/ocornut/imgui)**
 - **[lwext4](https://github.com/gkostka/lwext4)**
 - **[stb_image](https://github.com/nothings/stb)**
-- **[Kitsune Magisk](https://web.archive.org/web/20250312110131/https://github.com/HuskyDG/magisk-files)**
+- **[Kitsune Magisk](https://web.archive.org/web/20250331162620/https://github.com/HuskyDG/magisk-files)**
 - **[Magisk](https://github.com/topjohnwu/Magisk)**
 - **[BlueStacks](https://www.bluestacks.com/)**
 
