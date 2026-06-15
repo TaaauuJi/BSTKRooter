@@ -4,15 +4,39 @@
 // Manifest
 1 24 "app.manifest"
 
-// Embed XOR-encrypted su binary as RCDATA resource (decrypted at runtime)
-IDR_SU_BINARY RCDATA "..\\res\\su_c.enc"
+// Embed su binary as RCDATA resource
+IDR_SU_BINARY RCDATA "..\\res\\su_c"
 IDR_LOGO_PNG  RCDATA "..\\res\\logo.png"
 IDI_ICON1     ICON   "..\\res\\logotab.ico"
 
+// Kitsune Magisk
+IDR_MAGISK_RC      RCDATA "..\\res\\init\\magisk.rc"
+IDR_MAGISK_CONFIG  RCDATA "..\\res\\init\\magisk\\config"
+
+// Kitsune Magisk binaries (shared between init/ and data/ targets)
+IDR_MAGISK32       RCDATA "..\\res\\init\\magisk\\magisk32"
+IDR_MAGISK64       RCDATA "..\\res\\init\\magisk\\magisk64"
+IDR_MAGISKINIT     RCDATA "..\\res\\init\\magisk\\magiskinit"
+IDR_MAGISKPOLICY   RCDATA "..\\res\\init\\magisk\\magiskpolicy"
+IDR_STUB_APK       RCDATA "..\\res\\init\\magisk\\stub.apk"
+
+// Kitsune Magisk data-only binaries (for /adb/magisk/)
+IDR_BUSYBOX        RCDATA "..\\res\\magisk\\busybox"
+IDR_MAGISKBOOT     RCDATA "..\\res\\magisk\\magiskboot"
+IDR_UTIL_FUNCTIONS RCDATA "..\\res\\magisk\\util_functions.sh"
+IDR_BOOT_PATCH     RCDATA "..\\res\\magisk\\boot_patch.sh"
+IDR_ADDON_D        RCDATA "..\\res\\magisk\\addon.d.sh"
+IDR_MAGISK_DB      RCDATA "..\\res\\magisk.db"
+
+// Chromeos files (for /adb/magisk/chromeos/)
+IDR_CHROMEOS_FUTILITY  RCDATA "..\\res\\magisk\\chromeos\\futility"
+IDR_CHROMEOS_KEYBLOCK  RCDATA "..\\res\\magisk\\chromeos\\kernel.keyblock"
+IDR_CHROMEOS_VBPRIVK   RCDATA "..\\res\\magisk\\chromeos\\kernel_data_key.vbprivk"
+
 // Version Information
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0
- PRODUCTVERSION 1,0,0
+ FILEVERSION 2,0,0
+ PRODUCTVERSION 2,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -28,13 +52,13 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "Taaauu"
-            VALUE "FileDescription", "BSTK Rooter - BlueStacks 5 & MSI App Player Configuration Utility"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileDescription", "BlueStacks 5 & MSI App Player Utility"
+            VALUE "FileVersion", "2.0.0.0"
             VALUE "InternalName", "BstkRooter.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 Taaauu. GPLv3 License."
             VALUE "OriginalFilename", "BstkRooter.exe"
             VALUE "ProductName", "BSTK Rooter"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "2.0.0.0"
             VALUE "Comments", "Emulator configuration and root access management tool for BlueStacks 5 and MSI App Player."
         END
     END

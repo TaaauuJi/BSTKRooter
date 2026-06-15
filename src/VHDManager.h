@@ -69,6 +69,7 @@ public:
     bool CopyFileFromHost(const std::string& host_path, const std::string& ext4_path);
     bool CopyFileToHost(const std::string& ext4_path, const std::string& host_path);
     bool DeleteFile(const std::string& path);
+    bool DeleteRecursive(const std::string& path);
     bool ListDirectory(const std::string& path, std::vector<std::string>& entries);
     bool SetFilePermissions(const std::string& path, uint32_t mode);
     bool SetFileOwner(const std::string& path, uint32_t uid, uint32_t gid);
@@ -110,4 +111,4 @@ private:
     bool m_isVirtDiskAttached;
 };
 
-#endif // VHD_MANAGER_H
+#endif

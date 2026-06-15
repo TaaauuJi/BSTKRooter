@@ -135,9 +135,18 @@ int main(int, char**)
     if (io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", fontSize * dpi) == nullptr)
         io.Fonts->AddFontDefault();
 
+    ImFont* brandingFont = nullptr;
+    if (const char* localAppData = std::getenv("LOCALAPPDATA")) {
+        std::string fontPath = std::string(localAppData) + "\\Microsoft\\Windows\\Fonts\\Famulred.otf";
+        brandingFont = io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 20.0f * dpi);
+    }
+
     constexpr float BG[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     RootTool app;
+    if (brandingFont) {
+        app.SetBrandingFont(brandingFont);
+    }
 
     ID3D11ShaderResourceView* logo_srv = nullptr;
     int logo_w = 0, logo_h = 0;

@@ -394,7 +394,6 @@ bool VHDManager::ReadVHDFooter() {
     }
     
     if (!found_footer) {
-        // Not a VHD? Try as raw image
         SetError("No VHD footer found - treating as raw image");
     }
     
@@ -963,6 +962,50 @@ bool VHDManager::DeleteFile(const std::string& path) {
         return false;
     }
     return true;
+}
+
+bool VHDManager::DeleteRecursive(const std::string& path) {
+    if (!IsExt4Mounted()) {
+        SetError("ext4 not mounted");
+        return false;
+    }
+
+    ext4_dir dir;
+    int rc = ext4_dir_open(&dir, path.c_str());
+    if (rc != EOK) {
+        // Assume it's a file if we can't open it as a directory
+        return DeleteFile(path);
+    }
+
+    std::vector<std::string> entries;
+    const ext4_direntry* de;
+    while ((de = ext4_dir_entry_next(&dir)) != nullptr) {
+        std::string name((char*)de->name, de->name_length);
+        if (name != "." && name != "..") {
+            entries.push_back(name);
+        }
+    }
+    ext4_dir_close(&dir);
+
+    bool success = true;
+    for (const auto& entry : entries) {
+        std::string subPath = path;
+        if (!subPath.empty() && subPath.back() != '/') {
+            subPath += "/";
+        }
+        subPath += entry;
+        if (!DeleteRecursive(subPath)) {
+            success = false;
+        }
+    }
+
+    rc = ext4_dir_rm(path.c_str());
+    if (rc != EOK && success) {
+        SetError(MakeError("Failed to delete directory: ", path.c_str()));
+        return false;
+    }
+    
+    return success;
 }
 
 bool VHDManager::ListDirectory(const std::string& path, std::vector<std::string>& entries) {

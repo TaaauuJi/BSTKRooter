@@ -1,5 +1,8 @@
 build/
 bin/
+VHDExplorer/
+scripts/
+res/magisk.apk
 
 imgui/
 lwext4/
@@ -14,7 +17,6 @@ lwext4/
 *.exe
 *.bak
 *.enc
-res/su_c
 
 .vs/
 *.sln
@@ -30,4 +32,3 @@ imgui.ini
 Thumbs.db
 desktop.ini
 .DS_Store
-
