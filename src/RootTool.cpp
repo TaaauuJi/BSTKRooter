@@ -94,9 +94,7 @@ void RootTool::LaunchEmulator(const std::string& exePath, const std::string& arg
 
     bool launched = false;
 
-    // ── Method 1: Duplicate Explorer.exe's non-elevated token ────────────
-    // Explorer.exe runs as the logged-in standard user. We duplicate its
-    // token and use CreateProcessWithTokenW to spawn HD-Player under it.
+    // ── Method 1: Duplicate Explorer.exe's non-elevated token
     DWORD explorerPid = 0;
     {
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -251,7 +249,7 @@ void RootTool::LaunchEmulator(const std::string& exePath, const std::string& arg
         if (SUCCEEDED(hrCo)) CoUninitialize();
     }
 
-    // ── Method 3: Elevated CreateProcess fallback ────────────────────────
+    // ── Method 3: Elevated CreateProcess fallback 
     if (!launched) {
         Log("[~] All de-elevation methods failed, falling back to elevated CreateProcess...");
         std::string sc = "\"" + exePath + "\" " + args;
