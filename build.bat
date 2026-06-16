@@ -73,12 +73,11 @@ set LIBS=d3d11.lib dxgi.lib advapi32.lib shell32.lib dwmapi.lib ole32.lib "%BUIL
 
 :: ─── Compile & Link ─────────────────────────────────────────────────────
 echo [2/2] Compiling...
-cl /nologo /W3 /O2 /Zi /MD /EHsc /std:c++17 ^
+cl /nologo /W3 /O2 /MD /EHsc /std:c++17 /DNDEBUG ^
     %INCLUDES% %SOURCES% "%BUILD%\resources.res" ^
     /Fo"%BUILD%\\" ^
     /Fe"%BUILD%\BstkDeltaRooter.exe" ^
-    /Fd"%BUILD%\BstkDeltaRooter.pdb" ^
-    /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup /DEBUG /OPT:REF /OPT:ICF %LIBS%
+    /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup /OPT:REF /OPT:ICF %LIBS%
 
 if %errorlevel% neq 0 (
     echo [Build] FAILED.
