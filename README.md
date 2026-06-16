@@ -1,4 +1,4 @@
-# BSTK Rooter
+# BSTK Rooter - BlueStacks 5 & MSI App Player Rooting Tool
 
 **BSTK Rooter** is a open-source C++ utility designed to configure and root **BlueStacks 5** and **MSI App Player** instances. By performing low-level offline modifications on virtual disk images, it grants you complete control over your Android environments for game analysis, reverse engineering, and debugging.
 
