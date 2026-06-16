@@ -97,11 +97,11 @@ BSTKRooter/
 - **Install:**
   1. Click **"Install Kitsune Magisk"**.
   2. The tool copies files offline to virtual disks and opens the emulator.
-  3. A Windows Toast Notification will pop up prompting you to **manually install the Magisk manager APK** in the running emulator.
+  3. A Windows Toast Notification will pop up prompting you to **`Manually install the Magisk manager APK`** in the running emulator.
 - **Uninstall:**
   1. Click **"Uninstall Kitsune Magisk"**.
   2. The tool closes the emulator, cleans all Magisk system directories offline, and restarts the emulator.
-  3. A Windows Toast Notification will pop up prompting you to **manually uninstall the Magisk manager app**.
+  3. A Windows Toast Notification will pop up prompting you to **`Manually uninstall the Magisk manager app`**.
 
 ---
 
